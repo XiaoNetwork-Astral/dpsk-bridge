@@ -10,9 +10,9 @@
 
 本项目需要 **Node.js 24.9+**、**npm** 和 **Git**，仅支持读取 v4 格式的会话日志
 
-## 安装与管理
+## 安装
 
-运行安装脚本会自动拉取最新 Release（默认位于 `~/.dpsk-bridge/app`）、安装或升级 `dsh`、全局链接 `dsb` 与 `dsv`，并将 Skills 同步到宿主目录
+运行下列命令即可将本项目安装到所有受支持的 harness 中：
 
 **Linux / macOS：**
 
@@ -26,11 +26,33 @@ curl -fsSL https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/dow
 irm https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/installer.ps1 | iex
 ```
 
-默认情况下，脚本会自动检测已安装的 Claude（`~/.claude`）和 Codex（`~/.agents` 或 `~/.codex`），你也可以通过环境变量指定目标宿主或执行升级、卸载：
+## 卸载
 
-- **指定宿主**：设置 `DPSK_TARGET=Claude,Codex`；其他宿主可设置 `DPSK_TARGET=Generic` 并配合 `DPSK_SKILLS_DIR=/path/to/skills`
-- **升级**：设置 `DPSK_ACTION=upgrade` 重新运行脚本，或在终端运行 `dsv update`（也会在需要时升级 `dsh`）
-- **卸载**：设置 `DPSK_ACTION=uninstall`（配合 `DPSK_TARGET` 卸载单个宿主，或配合 `DPSK_UNINSTALL_ALL=1` 全部卸载）；卸载仅移除注入的 Skills，不会删除 `dsh`、凭据及历史会话记录
+运行下列命令即可从所有受支持的 harness 当中卸载本项目：
+
+**Linux / macOS：**
+
+```bash
+curl -fsSL https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/installer.sh | bash -s -- uninstall
+```
+
+**Windows (PowerShell)：**
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/installer.ps1))) uninstall
+```
+
+## 清理（仅推荐特殊情况使用）
+
+清理脚本会自动找到并移除 `dsb`、`dsv`，删除受支持的 harness 目录中属于本项目的 Skills：
+
+```bash
+curl -fsSL https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/cleanup.sh | bash
+```
+
+```powershell
+irm https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/cleanup.ps1 | iex
+```
 
 ## 使用方法
 
