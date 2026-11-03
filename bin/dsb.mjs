@@ -23,7 +23,7 @@ try {
     } else if (command === 'stats') {
       emit(stats());
     } else {
-      const job = readJob(positionals.id || '');
+      const job = readJob(positionals.id);
       if (command === 'status') emit(status(job));
       else if (command === 'wait') emit(await waitJob(job, options.timeout));
       else if (command === 'result') emit(result(job));
@@ -34,11 +34,11 @@ try {
       else if (command === 'events') emit(eventsPage(job, options.after, options.limit));
       else if (command === 'review') emit(reviewJob(job, options.verdict, options.note, undefined,
         options.accounting ? JSON.parse(fs.readFileSync(options.accounting, 'utf8').replace(/^\uFEFF/, '')) : null));
-      else {
+      else if (command === 'retry') {
         const next = await retryJob(job, briefText(options.feedback, 'Feedback'), emit, undefined, options.notifyCmd);
         emit({ event: 'finished', ...result(next) });
         process.exitCode = next.processState === 'completed' && next.reportedResult === 'OK' ? 0 : 1;
-      }
+      } else throw new Error(`Unknown command: ${command}`);
     }
   }
 } catch (error) { emit({ error: error.message }); process.exitCode = 1; }

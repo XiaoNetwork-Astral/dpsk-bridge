@@ -15,7 +15,7 @@ const thisFile = fileURLToPath(import.meta.url);
 if (process.argv[2] === '--scheduler-worker') {
   const options = JSON.parse(process.argv[3]);
   try {
-    const slot = await acquireSlot({ ...options, onQueued: info => process.send?.({ type: 'queued', ...info }) });
+    const slot = await acquireSlot(options);
     if (options.marker) fs.writeFileSync(options.marker, String(process.pid), { flag: 'wx' });
     const start = process.hrtime.bigint().toString();
     process.send?.({ type: 'acquired', pid: process.pid, start });
@@ -112,10 +112,10 @@ if (process.argv[2] === '--scheduler-worker') {
     const right = await acquireSlot(options(f, 'right', { scopes: ['right/new'] }));
     const reader = await acquireSlot(options(f, 'reader', { scopes: ['reading'], readOnly: true }));
     const reader2 = await acquireSlot(options(f, 'reader2', { scopes: ['reading/deep'], readOnly: true }));
-    const controller = new AbortController(); let queued = false;
-    const parent = acquireSlot(options(f, 'parent', { signal: controller.signal, onQueued: () => { queued = true; } }));
+    const controller = new AbortController();
+    const parent = acquireSlot(options(f, 'parent', { signal: controller.signal }));
     const checked = assert.rejects(parent, { name: 'AbortError' });
-    await until(() => queued);
+    await until(() => state(f).reservations.some(item => item.id === 'parent' && item.state === 'queued'));
     assert.equal(state(f).reservations.find(item => item.id === 'parent').state, 'queued');
     controller.abort(); await checked;
     await Promise.all([left.release(), right.release(), reader.release(), reader2.release()]);
@@ -123,7 +123,7 @@ if (process.argv[2] === '--scheduler-worker') {
     await writer.release();
   });
 
-  test('queued cancellation, timeout, and callback errors remove only their own reservations', async t => {
+  test('queued cancellation and timeout remove only their own reservations', async t => {
     const f = fixture(t), first = await acquireSlot(options(f, 'first'));
     const controller = new AbortController();
     const pending = acquireSlot(options(f, 'cancel', { signal: controller.signal }));
@@ -131,7 +131,6 @@ if (process.argv[2] === '--scheduler-worker') {
     await until(() => state(f).reservations.length === 2);
     controller.abort(); await rejected;
     await assert.rejects(acquireSlot(options(f, 'timeout', { queueTimeoutMs: 70 })), { code: 'QUEUE_TIMEOUT' });
-    await assert.rejects(acquireSlot(options(f, 'callback', { onQueued: () => { throw new Error('callback failed'); } })), /callback failed/);
     await assert.rejects(acquireSlot(options(f, 'preabort', { signal: AbortSignal.abort() })), { name: 'AbortError' });
     assert.deepEqual(state(f).reservations.map(item => item.id), ['first']);
     await first.release();
@@ -194,7 +193,8 @@ if (process.argv[2] === '--scheduler-worker') {
   test('dead queued owners and dead unique mutex contenders are cleaned safely', async t => {
     const f = fixture(t), initial = await acquireSlot(options(f, 'initial'));
     const waiting = worker(t, options(f, 'dead-queued', { hold: 'manual' }));
-    await waiting.wait('queued'); waiting.child.kill('SIGKILL'); await waiting.closed.catch(() => {});
+    await until(() => state(f).reservations.some(item => item.id === 'dead-queued' && item.state === 'queued'));
+    waiting.child.kill('SIGKILL'); await waiting.closed.catch(() => {});
     const gate = path.join(f.home, 'scheduler', 'turnstile', `${waiting.child.pid}-${crypto.randomUUID()}`);
     fs.mkdirSync(gate); fs.writeFileSync(path.join(gate, 'ticket.json'), '{"ticket":1}');
     await initial.release();
@@ -227,10 +227,10 @@ if (process.argv[2] === '--scheduler-worker') {
     const current2 = worker(t, options(f, 'current2', { scopes: ['b'], readOnly: true, hold: 'manual' }));
     await Promise.all([current.wait('acquired'), current2.wait('acquired')]);
     const updater = worker(t, options(f, 'updater', { exclusive: true, maxConcurrent: 1, hold: 'manual' }));
-    await updater.wait('queued');
+    await until(() => state(f).reservations.some(item => item.id === 'updater' && item.state === 'queued'));
     const other = path.join(f.root, 'other'); fs.mkdirSync(other);
     const later = worker(t, options(f, 'later', { workspace: other, readOnly: true, hold: 'manual' }));
-    await later.wait('queued');
+    await until(() => state(f).reservations.some(item => item.id === 'later' && item.state === 'queued'));
     current.child.send('release'); await current.closed;
     await delay(70); assert.equal(updater.messages.some(message => message.type === 'acquired'), false);
     current2.child.send('release'); await current2.closed;

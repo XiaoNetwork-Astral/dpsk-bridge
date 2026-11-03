@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { runJob, readJob, sendMessage, answerRequest, eventsPage, cancelJob, result, retryJob, reviewJob, stats, briefText } from '../lib/bridge.mjs';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { runJob, readJob, sendMessage, answerRequest, eventsPage, cancelJob, result, retryJob, reviewJob, stats, briefText, waitJob, unlockJob } from '../lib/bridge.mjs';
 
 const fake = `
 import readline from 'node:readline';
@@ -77,6 +79,11 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 const digest = buffer => createHash('sha256').update(buffer).digest('hex');
 const pngBytes = () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x49, 0x48, 0x44, 0x52]);
 const jpegBytes = () => Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+async function deadPid() {
+  const child = spawn(process.execPath, ['-e', ''], { windowsHide: true, stdio: 'ignore' });
+  await once(child, 'close');
+  return child.pid;
+}
 
 test('images are sent as base64 blocks after the text block and recorded without content', async t => {
   const { root, options, home } = setup(t, 'describe the images');
@@ -118,6 +125,7 @@ test('a job without images sends exactly one text block', async t => {
   const prompt = fs.readFileSync(path.join(path.dirname(job.reportFile), 'prompt.txt'), 'utf8');
   assert.deepEqual(JSON.parse(fs.readFileSync(capture, 'utf8')), [{ type: 'text', text: prompt }]);
   assert.deepEqual(job.images, []);
+  assert.equal('session' in job, false);
   assert.ok(!prompt.includes('[dpsk-bridge attached images]'));
 });
 
@@ -279,11 +287,166 @@ test('malformed SDK output fails the job and still releases the workspace', asyn
   assert.equal(next.processState, 'completed', next.error);
 });
 
-test('cleanup_failed jobs point at unlock before retry or review', async () => {
+test('cleanup_failed jobs point at unlock and a new task instead of retry or review', async () => {
   const job = { id: '00000000-0000-4000-8000-000000000000', processState: 'cleanup_failed' };
-  const expected = /Cleanup failed for this job; confirm its processes stopped and run dsb unlock .* --confirmed-stopped first/;
+  const expected = /run dsb unlock 00000000-0000-4000-8000-000000000000 --confirmed-stopped, then start a new task with dsb run\. This job cannot be retried or reviewed\./;
   await assert.rejects(retryJob(job, 'again', () => {}), expected);
   assert.throws(() => reviewJob(job, 'rework', 'note'), expected);
+});
+
+test('unlock releases the reservation but keeps cleanup_failed non-retryable', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-unlock-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'), id = '00000000-0000-4000-8000-000000000020';
+  const dir = path.join(home, 'jobs', id), pid = await deadPid();
+  const job = { version: 2, id, rootId: id, parentId: null, processState: 'cleanup_failed',
+    supervisorPid: pid, childPid: pid, pendingRequests: [], review: null, exitCode: null, reportedResult: null, cwd: root };
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
+  const stateFile = path.join(home, 'scheduler', 'state.json');
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(stateFile, JSON.stringify({ version: 1, nextSequence: 2, reservations: [{
+    id, token: '00000000-0000-4000-8000-000000000021', supervisorPid: pid, childPid: pid,
+    workspace: fs.realpathSync(root), scopes: [fs.realpathSync(root)], readOnly: false, exclusive: false, resources: [],
+    maxConcurrent: 8, state: 'active', sequence: 1, queuedAt: Date.now(), startedAt: Date.now(),
+  }] }));
+  await assert.rejects(unlockJob(job, false, home), /confirmed-stopped/);
+  await assert.rejects(unlockJob({ ...job, supervisorPid: process.pid }, true, home), /still present/);
+  assert.deepEqual(await unlockJob(job, true, home), { id, unlocked: true,
+    note: 'Inspect partial changes before creating a new run; unknown runs are not automatically retried.' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, 'utf8')).reservations, []);
+  const expected = /then start a new task with dsb run\. This job cannot be retried or reviewed\./;
+  await assert.rejects(retryJob(job, 'again', () => {}, home), expected);
+  assert.throws(() => reviewJob(job, 'rework', 'note', home), expected);
+});
+
+test('a failed after.json write keeps the successful run result', async t => {
+  const { options, home } = setup(t, 'bookkeeping after.json');
+  const original = fs.renameSync;
+  fs.renameSync = (from, to) => {
+    if (String(to).endsWith('after.json')) throw new Error('simulated after.json failure');
+    return original(from, to);
+  };
+  let job;
+  try { job = await runJob(options, () => {}, home); } finally { fs.renameSync = original; }
+  assert.equal(job.processState, 'completed', job.error);
+  assert.equal(job.reportedResult, 'OK');
+  assert.match(job.error, /writing after\.json: simulated after\.json failure/);
+  const saved = readJob(job.id, home);
+  assert.equal(saved.processState, 'completed');
+  assert.equal(saved.reportedResult, 'OK');
+  assert.match(saved.error, /after\.json/);
+});
+
+test('a failed final save keeps the successful run result and records an event', async t => {
+  const { options, home } = setup(t, 'bookkeeping final save');
+  const original = fs.renameSync;
+  let failJobSave = false;
+  fs.renameSync = (from, to) => {
+    if (String(to).endsWith('after.json')) { const result = original(from, to); failJobSave = true; return result; }
+    if (failJobSave && String(to).endsWith('job.json')) { failJobSave = false; throw new Error('simulated final save failure'); }
+    return original(from, to);
+  };
+  let job;
+  try { job = await runJob(options, () => {}, home); } finally { fs.renameSync = original; }
+  assert.equal(job.processState, 'completed', job.error);
+  assert.equal(job.reportedResult, 'OK');
+  assert.match(job.error, /saving bookkeeping: simulated final save failure/);
+  assert.ok(eventsPage(job, 0, 200).events.some(event => event.event === 'bookkeeping_failed'));
+  const saved = readJob(job.id, home);
+  assert.equal(saved.processState, 'completed');
+  assert.equal(saved.reportedResult, 'OK');
+});
+
+test('stats counts version-1 records as legacy and reserves unreadable for failures', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-stats-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'), jobs = path.join(home, 'jobs');
+  const ids = { legacy: '00000000-0000-4000-8000-000000000030', current: '00000000-0000-4000-8000-000000000031',
+    broken: '00000000-0000-4000-8000-000000000032' };
+  for (const id of Object.values(ids)) fs.mkdirSync(path.join(jobs, id), { recursive: true });
+  fs.writeFileSync(path.join(jobs, ids.legacy, 'job.json'), JSON.stringify({ version: 1, id: ids.legacy }));
+  fs.writeFileSync(path.join(jobs, ids.current, 'job.json'), JSON.stringify({ version: 2, id: ids.current, rootId: ids.current,
+    parentId: null, usage: null, review: null }));
+  fs.writeFileSync(path.join(jobs, ids.broken, 'job.json'), '{not json');
+  const summary = stats(home);
+  assert.equal(summary.jobs, 1);
+  assert.equal(summary.legacyJobs, 1);
+  assert.equal(summary.unreadableJobs, 1);
+});
+
+test('wait does not revive a request answered after the event scan', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-wait-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'), id = '00000000-0000-4000-8000-000000000040';
+  const dir = path.join(home, 'jobs', id), requestId = '00000000-0000-4000-8000-000000000041';
+  fs.mkdirSync(dir, { recursive: true });
+  const job = { version: 2, id, parentId: null, rootId: id, processState: 'running', supervisorPid: process.pid,
+    pendingRequests: [{ requestId, method: 'user-question/ask', params: {} }], startedAt: Date.now(), review: null,
+    exitCode: null, reportedResult: null, cwd: root, reportFile: path.join(dir, 'report.txt'),
+    stderrFile: path.join(dir, 'stderr.log'), eventsFile: path.join(dir, 'events.jsonl') };
+  const jobFile = path.join(dir, 'job.json'), eventsFile = path.join(dir, 'events.jsonl');
+  fs.writeFileSync(jobFile, JSON.stringify(job)); fs.writeFileSync(eventsFile, '');
+  let delivered = false;
+  const originalStat = fs.statSync, originalRead = fs.readFileSync;
+  fs.statSync = (file, ...rest) => { const result = originalStat(file, ...rest); if (String(file) === eventsFile) delivered = true; return result; };
+  fs.readFileSync = (file, ...rest) => String(file) === jobFile && delivered
+    ? JSON.stringify({ ...job, pendingRequests: [] }) : originalRead(file, ...rest);
+  let waited;
+  try { waited = await waitJob({ id }, 1, home); } finally { fs.statSync = originalStat; fs.readFileSync = originalRead; }
+  assert.equal(waited.reason, 'timeout');
+  assert.deepEqual(waited.actionableRequests, []);
+});
+
+test('run timeout rejects zero with the real allowed range', async t => {
+  const { options, home } = setup(t, 'timeout range');
+  for (const timeout of [0, 86401]) await assert.rejects(runJob({ ...options, timeout }, () => {}, home),
+    /timeout must be greater than 0 and at most 86400 seconds/);
+});
+
+test('an inbox file whose rejection event cannot be written is reported and kept', async t => {
+  const { options, home } = setup(t, 'inbox disposition');
+  const originalAppend = fs.appendFileSync;
+  fs.appendFileSync = (file, data, ...rest) => {
+    if (typeof data === 'string' && data.includes('"input_rejected"')) throw new Error('simulated event cap');
+    return originalAppend(file, data, ...rest);
+  };
+  let job;
+  try {
+    job = await runJob(options, event => {
+      if (event.event === 'started') fs.writeFileSync(path.join(home, 'jobs', event.id, 'inbox', 'stray.json'),
+        JSON.stringify({ id: 'stray', kind: 'message', data: { text: 'x' } }));
+    }, home);
+  } finally { fs.appendFileSync = originalAppend; }
+  assert.equal(job.processState, 'completed', job.error);
+  assert.match(job.error, /Inbox disposition failed: stray: simulated event cap/);
+  assert.match(fs.readFileSync(job.stderrFile, 'utf8'), /Inbox disposition failed:/);
+  assert.ok(fs.existsSync(path.join(home, 'jobs', job.id, 'inbox', 'stray.json')));
+});
+
+test('review accepted requires exit code zero and an OK reported result', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-review-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'), id = '00000000-0000-4000-8000-000000000050';
+  const dir = path.join(home, 'jobs', id);
+  fs.mkdirSync(dir, { recursive: true });
+  const job = { version: 2, id, rootId: id, parentId: null, processState: 'completed', supervisorPid: process.pid,
+    pendingRequests: [], review: null, exitCode: 0, reportedResult: 'OK', cwd: root };
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
+  for (const candidate of [{ ...job, exitCode: 1 }, { ...job, reportedResult: 'FAIL' }])
+    assert.throws(() => reviewJob(candidate, 'accepted', 'evidence', home), /cannot be marked accepted/);
+  assert.equal(reviewJob(job, 'accepted', 'evidence', home).acceptance, 'accepted');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8')).review.verdict, 'accepted');
+});
+
+test('POSIX cleanup resolves when the child exits instead of waiting for SIGKILL', { skip: process.platform === 'win32' }, async t => {
+  const { options, home } = setup(t, '[hold] wait forever');
+  let startedAt;
+  const job = await runJob(options, event => {
+    if (event.event === 'started') { startedAt = Date.now(); setTimeout(() => cancelJob(readJob(event.id, home), home), 20); }
+  }, home);
+  assert.equal(job.processState, 'cancelled', job.error);
+  assert.ok(Date.now() - startedAt < 1400, `cleanup took ${Date.now() - startedAt}ms`);
 });
 
 test('accounting accepts an unknown host Cost key and stats aggregates it', async t => {

@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { COMMANDS, parse, parseCommand, rootHelp, commandHelp } from '../lib/cli.mjs';
+
+const dsbBin = fileURLToPath(new URL('../bin/dsb.mjs', import.meta.url));
 
 // The parser this command table replaces. Legal invocations must keep the same
 // option object, including the four arrays the old parser always initialized.
@@ -86,6 +93,19 @@ test('required options are reported with a command help hint', () => {
   assert.throws(() => parseCommand('answer', ['id', '--answer', 'answer.json']), /Missing required option: --request/);
   assert.throws(() => parseCommand('review', ['id', '--verdict', 'accepted']), /Missing required option: --note/);
   assert.throws(() => parseCommand('unlock', ['id']), /Missing required option: --confirmed-stopped/);
+});
+
+test('ID-taking commands reject a missing ID at parse time', () => {
+  const cases = {
+    wait: [], status: [], result: [], events: [], cancel: [],
+    send: ['--message-file', 'message.md'],
+    answer: ['--request', 'req', '--answer', 'answer.json'],
+    retry: ['--feedback', 'feedback.md'],
+    review: ['--verdict', 'accepted', '--note', 'evidence'],
+    unlock: ['--confirmed-stopped'],
+  };
+  for (const [name, args] of Object.entries(cases))
+    assert.throws(() => parseCommand(name, args), new RegExp(`Missing required argument: <ID>\\. Run 'dsb ${name} --help' for usage`), name);
 });
 
 test('global help, command help, and version dispatch', () => {
@@ -176,4 +196,50 @@ test('a narrower width wraps option descriptions and keeps the indent', () => {
   assert.match(lines[first], /--max-concurrent <N>\s+\S/);
   assert.ok(lines[first + 1].startsWith(' '.repeat(descriptionColumn)));
   assert.notEqual(lines[first + 1][descriptionColumn], ' ');
+});
+
+function cliRuntime(report) {
+  return `
+import readline from 'node:readline';
+const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
+let sessionId, seq = 0;
+const event = (type, data) => write({ method: 'session.event', params: { sessionId, event: { type, seq: ++seq, time: Date.now(), data } } });
+readline.createInterface({ input: process.stdin }).on('line', line => {
+  const m = JSON.parse(line);
+  if (m.method === 'initialize') write({ id: m.id, result: { serverInfo: { name: 'deepseek-harness-sdk-runtime' } } });
+  else if (m.method === 'session/prompt') {
+    sessionId = m.params.sessionId;
+    event('assistant/message', { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: ${JSON.stringify(report)} }] } });
+    event('turn/end', { turn: 1, reason: { kind: 'completed' } });
+    write({ id: m.id, result: { messageId: 'm' } });
+  } else if (m.method === 'session/wait') write({ id: m.id, result: {} });
+  else if (m.method === 'shutdown') { write({ id: m.id, result: {} }); setTimeout(() => process.exit(0), 10); }
+});`;
+}
+
+async function runCli(t, report) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-dsb-cli-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
+  const entry = path.join(root, 'runtime', 'lib', 'bin.mjs');
+  fs.writeFileSync(entry, cliRuntime(report));
+  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.1-rc.3' }));
+  const brief = path.join(root, 'brief.md'); fs.writeFileSync(brief, 'cli exit code');
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [dsbBin, 'run', '--brief', brief, '--dsh-entry', entry, '--cwd', root, '--timeout', '20'], {
+      env: { ...process.env, DSH_HOME: root }, windowsHide: true,
+    });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', data => { stdout += data; });
+    child.stderr.on('data', data => { stderr += data; });
+    child.once('error', reject);
+    child.once('close', code => resolve({ code, stdout, stderr }));
+  });
+}
+
+test('bin/dsb.mjs exits 0 for a completed OK run and 1 for a completed non-OK run', { timeout: 60000 }, async t => {
+  const ok = await runCli(t, 'RESULT: OK');
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  const failed = await runCli(t, 'RESULT: FAIL');
+  assert.equal(failed.code, 1, failed.stdout + failed.stderr);
 });

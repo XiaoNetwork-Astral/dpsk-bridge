@@ -5,7 +5,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import { runJob, readJob, sendMessage, answerRequest, result, eventsPage } from '../lib/bridge.mjs';
+import { listSessionFiles } from '../lib/sessions.mjs';
 
 test('published dsh runs real SDK, host question plugin, followup, and v4 logs without a model call', {
   skip: !process.env.DPSK_REAL_DSH_ENTRY, timeout: 60000,
@@ -16,7 +18,7 @@ test('published dsh runs real SDK, host question plugin, followup, and v4 logs w
   const previous = { DSH_HOME: process.env.DSH_HOME, DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY, DSH_TELEMETRY_DISABLED: process.env.DSH_TELEMETRY_DISABLED };
   process.env.DSH_HOME = path.join(root, '.dsh'); delete process.env.DEEPSEEK_API_KEY; process.env.DSH_TELEMETRY_DISABLED = '1';
   t.after(() => { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value; });
-  const llm = pathToFileURL(path.resolve(path.dirname(entry), '../../dsh-llm/lib/index.js')).href;
+  const llm = pathToFileURL(createRequire(entry).resolve('@deepseek-ai/dsh-llm')).href;
   const plugin = path.join(root, 'mock-provider.mjs');
   fs.writeFileSync(plugin, `
 import { LlmAdapter } from ${JSON.stringify(llm)};
@@ -58,6 +60,6 @@ export function apply(ctx){ctx.llm.registerAdapter(['bridge-test'],new Adapter()
   assert.equal(job.processState, 'completed', `${job.error}\n${fs.readFileSync(job.stderrFile, 'utf8')}`);
   assert.equal(job.reportedResult, 'OK'); assert.ok(asked > 0, JSON.stringify(eventsPage(job, 0, 200).events.filter(e => e.params?.event?.type === 'tool/result')));
   assert.match(result(job).report, /HOST_UPDATE/);
-  assert.equal(job.session.matched, true, JSON.stringify(job.session)); assert.equal(job.session.version, 4);
+  assert.ok(listSessionFiles(path.join(path.dirname(home), 'sessions')).some(session => session.version === 4));
   assert.ok(eventsPage(job, 0, 200).events.some(e => e.event === 'input_delivered'));
 });
