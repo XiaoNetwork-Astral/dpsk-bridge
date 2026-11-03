@@ -62,7 +62,7 @@ Delegation keeps the user's authorization as it is. dsh does what the task needs
 
 The bridge tells dsh to ask the host agent with its question tool, and wait for the answer, when the settled decisions do not fit the code it finds, when two reasonable approaches would give results the user would notice as different, or when the work needs a wider scope. Everything else dsh settles itself and lists in its report.
 
-Answer briefly: the decision, with a short reason when it helps dsh continue. Each job gets at most 3 answered questions; permission decisions are not counted. When dsh asks a fourth, the job is less bounded than planned: tell the user what is going on, and answer only after the user decides how to proceed.
+Answer briefly: the decision, with a short reason when it helps dsh continue. dsb allows 3 answered questions per job (permission answers are not counted); a fourth means the job is less bounded than planned, so `dsb wait` returns `escalate` and `dsb answer` refuses it. Tell the user what is going on; if the user decides to continue, answer with `--user-ok`, which lifts the cap for that job.
 
 ## Calling and waiting
 
@@ -78,12 +78,14 @@ The host names below are examples. A host that is not listed follows the "Any ho
 
 The host's background task list shows both the host agent's own commands and dsh jobs. When the host lets you name or describe the background command for `dsb run` / `dsb retry`, start the description with `[dpsk-bridge]` (for example `[dpsk-bridge] Investigate the login failure`) so the user can tell at a glance what dsh is doing. The prefix belongs in the host's task description only, outside the brief.
 
-If your command tool can return output only after the command ends, you cannot answer questions or approvals mid-run. Set `--timeout` to an acceptable upper limit, read the result with `dsb result <ID>` afterwards, and dispatch only tasks that need no decisions midway. If a question causes a timeout, dispatch again with `dsb retry`; that only resumes the interrupted work and is not the task's rework ("Review and rework").
+If your command tool can return output only after the command ends, you cannot answer questions or approvals mid-run. Set `--timeout` to an acceptable upper limit, read the result with `dsb result <ID>` afterwards, and dispatch only tasks that need no decisions midway. If a question causes a timeout, dispatch again with `dsb retry --resume`, which resumes the interrupted work and does not count as the task's rework ("Review and rework").
 
-Wait with `dsb wait <ID> --timeout <seconds>`, with `dsb run` in the background or a process session. It reads only local files and makes no model call; it returns once when the job ends, when a question or approval needs an answer, or when the timeout passes. Each `status` or `events` check costs the host agent a turn, so use `wait` for waiting and those commands for reading after it returns. `--timeout` defaults to 600, ranges 1–3600, and must fit within what the host allows for a single command. Act on the returned `reason`:
+Wait with `dsb wait <ID> --timeout <seconds>`, with `dsb run` in the background or a process session. It reads only local files and makes no model call; it returns once when the job ends, when a request needs an answer or the user's decision, when the job's context reaches its reminder threshold, or when the timeout passes. Each `status` or `events` check costs the host agent a turn, so use `wait` for waiting and those commands for reading after it returns. `--timeout` defaults to 600, ranges 1–3600, and must fit within what the host allows for a single command. Act on the returned `reason`:
 
 - `timeout`: wait again.
 - `request`: handle it with `dsb events` and `dsb answer` first. `actionableRequests` lists requests not yet answered; answered ones do not return again.
+- `escalate`: dsh asked a question past the job's cap (see "Questions during a run"); bring it to the user.
+- `context`: the job's context reached the reminder threshold (200000 tokens by default; `dsb run --context-limit <TOKENS>` or `DPSK_CONTEXT_LIMIT`). The job keeps running and the reminder comes once. Check `context` in `dsb status <ID>` and decide whether to let it finish, narrow it with a short `dsb send`, or cancel and split the remaining work into smaller jobs.
 - `finished`: read the result. For `cleanup_failed`, deal with leftover processes per the troubleshooting guide first.
 - `unknown`: the launcher ended unexpectedly; confirm the process state per the troubleshooting guide before anything else.
 
@@ -105,7 +107,7 @@ To let dsh see images, repeat `--image <file>`. Supported formats are JPEG, PNG,
 - `dsb status <ID>` shows the process record and `dsb result <ID>` the short report. `completed` only means the process exit code was 0; `reportedResult` is the model's own claim, and `acceptance` is the review result recorded by the host agent.
 - Launchers that share one `DSH_HOME` run at most 8 jobs at once by default; adjust with `DPSK_CONCURRENCY` or `--max-concurrent <1..256>`. The smallest limit among the participants applies, so when raising it set the same value for every launcher. Write jobs in one workspace exclude each other by default; repeat `--scope <path>` to let non-overlapping scopes run in parallel (paths relative to the Git workspace root). `--read-only` jobs run in parallel with each other and exclude overlapping write jobs; it is a cooperative declaration, not a sandbox. Repeat `--resource <name>` to serialize jobs across workspaces that share a resource. The host agent, IDEs, and other launch methods sit outside these reservations and coordinate scopes themselves.
 - A local file-system queue persists the queue state; cancellation and timeouts cover the queued phase. `cleanup_failed` jobs, and `unknown` jobs that had already started, keep their reservation until the host confirms the processes stopped (see Troubleshooting); a reservation still queued when its launcher disappeared is cleared automatically.
-- When MCP is needed, read the first 4 lines of `~/.dsh/patches/*-mcp.yml`, check the prerequisites, and load only the needed `--patch <file>` (repeatable); jobs without MCP load none. When a verification result exists and the configuration is unchanged, reuse it as it is. When a configuration is missing, use the `deepseek-mcp` skill from the same package.
+- When MCP is needed, read the first 4 lines of `*-mcp.yml` in `$DSH_HOME/patches` (`~/.dsh/patches` when `DSH_HOME` is unset), check the prerequisites, and load only the needed `--patch <file>` (repeatable); jobs without MCP load none. When a verification result exists and the configuration is unchanged, reuse it as it is. When a configuration is missing, use the `deepseek-mcp` skill from the same package.
 - Use the correct project root. For long paths, permissions, or locked files, read [Troubleshooting](references/troubleshooting.md); keep the project scope and the sandbox as they are while fixing the call.
 
 ## Two-way messages and requests
@@ -140,9 +142,9 @@ When something is wrong:
 
 1. A small mistake: the host agent fixes it directly and notes this in the review.
 2. The wrong direction: the host agent finds out why, from the relevant evidence or with a read-only job that only collects facts. It then writes the correct approach into the feedback as settled decisions, leaves dsh less to decide this time, and sends the job back once with `dsb retry <ID> --feedback <file>`, waiting the same way. The launcher keeps the original goal, working directory, and MCP configuration and creates a linked new session; it does not restore the old session's context, so point to the existing results and evidence.
-3. If the rework still misses: stop, and tell the user the current state, what was tried, and the failure evidence. The user decides what happens next.
+3. If the rework still misses: tell the user the current state, what was tried, and the failure evidence. The user decides what happens next.
 
-Each task gets one rework. Feedback adds evidence and decisions within the original goal; when the user changes the goal or the MCP configuration changes, write a full new brief and start a new task.
+dsb allows one rework per task: a second `dsb retry` on the same task is refused, and runs only with `--user-ok` once the user has decided to continue. A retry that only resumes work interrupted by a timeout or an unanswered question uses `--resume` and is not counted. Feedback adds evidence and decisions within the original goal; when the user changes the goal or the MCP configuration changes, write a full new brief and start a new task.
 
 Re-dispatch only after confirming the job really exited. To stop a job, use `dsb cancel <ID>`; an accepted cancel request does not yet mean the job exited. For `unknown` or `cleanup_failed`, deal with leftover processes before anything else. dsv's "No updates" is not proof of an interruption. Partial changes from an interrupted job may still be valid; check the current state before resuming. See [Troubleshooting](references/troubleshooting.md).
 
