@@ -9,24 +9,39 @@ import { createRequire } from 'node:module';
 import { runJob, readJob, sendMessage, answerRequest, result, eventsPage } from '../lib/bridge.mjs';
 import { listSessionFiles } from '../lib/sessions.mjs';
 
-test('published dsh answers native questions and approvals over the SDK, then logs v4 without a model call', {
-  skip: !process.env.DPSK_REAL_DSH_ENTRY, timeout: 120000,
-}, async t => {
-  const entry = fs.realpathSync(process.env.DPSK_REAL_DSH_ENTRY);
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-real-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const previous = { DSH_HOME: process.env.DSH_HOME, DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
-    DSH_TELEMETRY_DISABLED: process.env.DSH_TELEMETRY_DISABLED, DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE };
-  process.env.DSH_HOME = path.join(root, '.dsh'); delete process.env.DEEPSEEK_API_KEY; process.env.DSH_TELEMETRY_DISABLED = '1';
-  // Pin the policy this test depends on: workspace-write with an approval prompt,
-  // so the mock provider's danger-full-access escalation must reach the host.
-  process.env.DSH_PERMISSION_MODE = 'workspace-write';
-  t.after(() => { for (const [key, value] of Object.entries(previous)) value === undefined ? delete process.env[key] : process.env[key] = value; });
-  const llm = pathToFileURL(createRequire(entry).resolve('@deepseek-ai/dsh-llm')).href;
-  const plugin = path.join(root, 'mock-provider.mjs');
-  // Three model steps: ask a question, request a sandbox escalation the host
-  // must approve, then report whether the escalated command really ran.
-  fs.writeFileSync(plugin, `
+test(
+  'published dsh answers native questions and approvals over the SDK, then logs v4 without a model call',
+  {
+    skip: !process.env.DPSK_REAL_DSH_ENTRY,
+    timeout: 120000,
+  },
+  async (t) => {
+    const entry = fs.realpathSync(process.env.DPSK_REAL_DSH_ENTRY);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-real-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const previous = {
+      DSH_HOME: process.env.DSH_HOME,
+      DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
+      DSH_TELEMETRY_DISABLED: process.env.DSH_TELEMETRY_DISABLED,
+      DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE,
+    };
+    process.env.DSH_HOME = path.join(root, '.dsh');
+    delete process.env.DEEPSEEK_API_KEY;
+    process.env.DSH_TELEMETRY_DISABLED = '1';
+    // Pin the policy this test depends on: workspace-write with an approval prompt,
+    // so the mock provider's danger-full-access escalation must reach the host.
+    process.env.DSH_PERMISSION_MODE = 'workspace-write';
+    t.after(() => {
+      for (const [key, value] of Object.entries(previous))
+        value === undefined ? delete process.env[key] : (process.env[key] = value);
+    });
+    const llm = pathToFileURL(createRequire(entry).resolve('@deepseek-ai/dsh-llm')).href;
+    const plugin = path.join(root, 'mock-provider.mjs');
+    // Three model steps: ask a question, request a sandbox escalation the host
+    // must approve, then report whether the escalated command really ran.
+    fs.writeFileSync(
+      plugin,
+      `
 import { LlmAdapter } from ${JSON.stringify(llm)};
 class Adapter extends LlmAdapter {
  async resolveModel(provider,model){return {provider,id:model,name:model};}
@@ -60,33 +75,90 @@ class Adapter extends LlmAdapter {
 }
 export const name='bridge-keyless-provider';export const inject=['llm'];
 export function apply(ctx){ctx.llm.registerAdapter(['bridge-test'],new Adapter());}
-`);
-  const patch = path.join(root, 'mock.patch.yml');
-  fs.writeFileSync(patch, `- insert:\n    - id: bridge-keyless-provider\n      name: ${JSON.stringify(plugin)}\n`);
-  const brief = path.join(root, 'brief.md'); fs.writeFileSync(brief, 'Run the keyless bridge integration. Ask the host, then return the mock report.');
-  const home = path.join(process.env.DSH_HOME, 'bridge');
-  let asked = 0, approvals = 0, sent = false, questionId = null, approvalId = null;
-  const job = await runJob({ cwd: root, brief, patch: [patch], dshEntry: entry, timeout: 60, provider: 'bridge-test', model: 'bridge-test' }, e => {
-    if (e.event !== 'request') return;
-    if (e.method === 'user-question/ask') {
-      asked++; questionId = e.requestId;
-      if (!sent) { sendMessage(readJob(e.id, home), 'HOST_UPDATE', home); sent = true; }
-      answerRequest(readJob(e.id, home), e.requestId, { answers: [{ id: 'choice', selected: [], custom: 'Continue mock validation' }] }, home);
-    } else if (e.method === 'approval/request') {
-      approvals++; approvalId = e.requestId;
-      answerRequest(readJob(e.id, home), e.requestId, { outcome: 'allowed-once' }, home);
-    }
-  }, home);
-  assert.equal(job.processState, 'completed', `${job.error}\n${fs.readFileSync(job.stderrFile, 'utf8')}`);
-  assert.equal(job.reportedResult, 'OK');
-  assert.ok(asked > 0, 'the native user-question/ask request reached the bridge');
-  assert.ok(approvals > 0, 'the native approval/request request reached the bridge');
-  assert.match(result(job).report, /HOST_UPDATE/);
-  assert.match(result(job).report, /approved/, 'the approved escalation actually ran the command');
-  const events = eventsPage(job, 0, 200).events;
-  assert.ok(events.some(e => e.event === 'request' && e.method === 'user-question/ask' && e.requestId === questionId));
-  assert.ok(events.some(e => e.event === 'input_delivered' && e.requestId === questionId));
-  assert.ok(events.some(e => e.event === 'request' && e.method === 'approval/request' && e.requestId === approvalId));
-  assert.ok(events.some(e => e.event === 'input_delivered' && e.requestId === approvalId));
-  assert.ok(listSessionFiles(path.join(path.dirname(home), 'sessions')).some(session => session.version === 4));
-});
+`,
+    );
+    const patch = path.join(root, 'mock.patch.yml');
+    fs.writeFileSync(
+      patch,
+      `- insert:\n    - id: bridge-keyless-provider\n      name: ${JSON.stringify(plugin)}\n`,
+    );
+    const brief = path.join(root, 'brief.md');
+    fs.writeFileSync(
+      brief,
+      'Run the keyless bridge integration. Ask the host, then return the mock report.',
+    );
+    const home = path.join(process.env.DSH_HOME, 'bridge');
+    let asked = 0,
+      approvals = 0,
+      sent = false,
+      questionId = null,
+      approvalId = null;
+    const job = await runJob(
+      {
+        cwd: root,
+        brief,
+        patch: [patch],
+        dshEntry: entry,
+        timeout: 60,
+        provider: 'bridge-test',
+        model: 'bridge-test',
+      },
+      (e) => {
+        if (e.event !== 'request') return;
+        if (e.method === 'user-question/ask') {
+          asked++;
+          questionId = e.requestId;
+          if (!sent) {
+            sendMessage(readJob(e.id, home), 'HOST_UPDATE', home);
+            sent = true;
+          }
+          answerRequest(
+            readJob(e.id, home),
+            e.requestId,
+            { answers: [{ id: 'choice', selected: [], custom: 'Continue mock validation' }] },
+            home,
+          );
+        } else if (e.method === 'approval/request') {
+          approvals++;
+          approvalId = e.requestId;
+          answerRequest(readJob(e.id, home), e.requestId, { outcome: 'allowed-once' }, home);
+        }
+      },
+      home,
+    );
+    assert.equal(
+      job.processState,
+      'completed',
+      `${job.error}\n${fs.readFileSync(job.stderrFile, 'utf8')}`,
+    );
+    assert.equal(job.reportedResult, 'OK');
+    assert.ok(asked > 0, 'the native user-question/ask request reached the bridge');
+    assert.ok(approvals > 0, 'the native approval/request request reached the bridge');
+    assert.match(result(job).report, /HOST_UPDATE/);
+    assert.match(
+      result(job).report,
+      /approved/,
+      'the approved escalation actually ran the command',
+    );
+    const events = eventsPage(job, 0, 200).events;
+    assert.ok(
+      events.some(
+        (e) =>
+          e.event === 'request' && e.method === 'user-question/ask' && e.requestId === questionId,
+      ),
+    );
+    assert.ok(events.some((e) => e.event === 'input_delivered' && e.requestId === questionId));
+    assert.ok(
+      events.some(
+        (e) =>
+          e.event === 'request' && e.method === 'approval/request' && e.requestId === approvalId,
+      ),
+    );
+    assert.ok(events.some((e) => e.event === 'input_delivered' && e.requestId === approvalId));
+    assert.ok(
+      listSessionFiles(path.join(path.dirname(home), 'sessions')).some(
+        (session) => session.version === 4,
+      ),
+    );
+  },
+);

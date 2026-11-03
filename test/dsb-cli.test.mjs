@@ -8,12 +8,18 @@ import { fileURLToPath } from 'node:url';
 import { COMMANDS, parse, parseCommand, rootHelp, commandHelp } from '../lib/cli.mjs';
 
 const dsbBin = fileURLToPath(new URL('../bin/dsb.mjs', import.meta.url));
-const dshVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).dshVersion;
+const dshVersion = JSON.parse(
+  fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+).dshVersion;
 const ID = '11111111-1111-1111-1111-111111111111';
 const removedExperimentalOption = '--notify-cmd';
 
 function messageOf(fn) {
-  try { fn(); } catch (error) { return error.message; }
+  try {
+    fn();
+  } catch (error) {
+    return error.message;
+  }
   assert.fail('expected the call to throw');
 }
 
@@ -26,52 +32,93 @@ const CASES = [
     name: 'run',
     id: null,
     args: [
-      '-C', 'project', '-b', 'brief.md',
-      '-p', 'a.yml', '--patch=b.yml',
-      '-i', 'one.png', '--image=two.png',
-      '--time-limit', '600', '--dsh-entry', '/opt/dsh/lib/bin.js',
-      '--provider', 'deepseek-official', '--model', 'deepseek-flash',
-      '--concurrency', '4', '-s', 'src', '--scope=lib',
-      '--read-only', '--resource', 'editor', '--resource', 'browser',
+      '-C',
+      'project',
+      '-b',
+      'brief.md',
+      '-p',
+      'a.yml',
+      '--patch=b.yml',
+      '-i',
+      'one.png',
+      '--image=two.png',
+      '--time-limit',
+      '600',
+      '--dsh-entry',
+      '/opt/dsh/lib/bin.js',
+      '--provider',
+      'deepseek-official',
+      '--model',
+      'deepseek-flash',
+      '--concurrency',
+      '4',
+      '-s',
+      'src',
+      '--scope=lib',
+      '--read-only',
+      '--resource',
+      'editor',
+      '--resource',
+      'browser',
     ],
     expected: {
-      cwd: 'project', brief: 'brief.md',
-      patch: ['a.yml', 'b.yml'], image: ['one.png', 'two.png'],
-      timeout: '600', dshEntry: '/opt/dsh/lib/bin.js',
-      provider: 'deepseek-official', model: 'deepseek-flash',
-      maxConcurrent: '4', scope: ['src', 'lib'], readOnly: true,
+      cwd: 'project',
+      brief: 'brief.md',
+      patch: ['a.yml', 'b.yml'],
+      image: ['one.png', 'two.png'],
+      timeout: '600',
+      dshEntry: '/opt/dsh/lib/bin.js',
+      provider: 'deepseek-official',
+      model: 'deepseek-flash',
+      maxConcurrent: '4',
+      scope: ['src', 'lib'],
+      readOnly: true,
       resource: ['editor', 'browser'],
     },
   },
   {
-    name: 'wait', id: ID, args: [ID, '-t', '600'],
+    name: 'wait',
+    id: ID,
+    args: [ID, '-t', '600'],
     expected: { timeout: '600' },
   },
   { name: 'status', id: ID, args: [ID], expected: {} },
   { name: 'result', id: ID, args: [ID], expected: {} },
   {
-    name: 'events', id: ID, args: [ID, '--cursor', '128', '--limit=20'],
+    name: 'events',
+    id: ID,
+    args: [ID, '--cursor', '128', '--limit=20'],
     expected: { cursor: '128', limit: '20' },
   },
   {
-    name: 'send', id: ID, args: [ID, '-m', 'message.md'],
+    name: 'send',
+    id: ID,
+    args: [ID, '-m', 'message.md'],
     expected: { message: 'message.md' },
   },
   {
-    name: 'answer', id: ID, args: [ID, '-r', 'req-1', '-a', 'answer.json'],
+    name: 'answer',
+    id: ID,
+    args: [ID, '-r', 'req-1', '-a', 'answer.json'],
     expected: { request: 'req-1', answer: 'answer.json' },
   },
   {
-    name: 'retry', id: ID, args: [ID, '-f', 'feedback.md', '--resume', '-u'],
+    name: 'retry',
+    id: ID,
+    args: [ID, '-f', 'feedback.md', '--resume', '-u'],
     expected: { feedback: 'feedback.md', resume: true, userOk: true },
   },
   {
-    name: 'review', id: ID, args: [ID, '--verdict', 'accepted', '--note', 'tests pass', '--accounting=accounting.json'],
+    name: 'review',
+    id: ID,
+    args: [ID, '--verdict', 'accepted', '--note', 'tests pass', '--accounting=accounting.json'],
     expected: { verdict: 'accepted', note: 'tests pass', accounting: 'accounting.json' },
   },
   { name: 'cancel', id: ID, args: [ID], expected: {} },
   {
-    name: 'unlock', id: ID, args: [ID, '--confirm-stopped'],
+    name: 'unlock',
+    id: ID,
+    args: [ID, '--confirm-stopped'],
     expected: { confirmStopped: true },
   },
   { name: 'stats', id: null, args: [], expected: {} },
@@ -88,18 +135,93 @@ test('every command parses legal arguments into the documented internal keys', (
 
 test('every documented short alias maps to its long option', () => {
   const cases = [
-    { command: 'run', prefix: ['-b', 'brief.md'], alias: '-C', value: 'project', key: 'cwd', expected: 'project' },
-    { command: 'run', prefix: [], alias: '-b', value: 'brief.md', key: 'brief', expected: 'brief.md' },
-    { command: 'run', prefix: ['-b', 'brief.md'], alias: '-p', value: 'a.yml', key: 'patch', expected: ['a.yml'] },
-    { command: 'run', prefix: ['-b', 'brief.md'], alias: '-i', value: 'a.png', key: 'image', expected: ['a.png'] },
-    { command: 'run', prefix: ['-b', 'brief.md'], alias: '-s', value: 'src', key: 'scope', expected: ['src'] },
+    {
+      command: 'run',
+      prefix: ['-b', 'brief.md'],
+      alias: '-C',
+      value: 'project',
+      key: 'cwd',
+      expected: 'project',
+    },
+    {
+      command: 'run',
+      prefix: [],
+      alias: '-b',
+      value: 'brief.md',
+      key: 'brief',
+      expected: 'brief.md',
+    },
+    {
+      command: 'run',
+      prefix: ['-b', 'brief.md'],
+      alias: '-p',
+      value: 'a.yml',
+      key: 'patch',
+      expected: ['a.yml'],
+    },
+    {
+      command: 'run',
+      prefix: ['-b', 'brief.md'],
+      alias: '-i',
+      value: 'a.png',
+      key: 'image',
+      expected: ['a.png'],
+    },
+    {
+      command: 'run',
+      prefix: ['-b', 'brief.md'],
+      alias: '-s',
+      value: 'src',
+      key: 'scope',
+      expected: ['src'],
+    },
     { command: 'wait', prefix: [ID], alias: '-t', value: '60', key: 'timeout', expected: '60' },
-    { command: 'send', prefix: [ID], alias: '-m', value: 'message.md', key: 'message', expected: 'message.md' },
-    { command: 'answer', prefix: [ID, '-a', 'answer.json'], alias: '-r', value: 'req-1', key: 'request', expected: 'req-1' },
-    { command: 'answer', prefix: [ID, '-r', 'req-1'], alias: '-a', value: 'answer.json', key: 'answer', expected: 'answer.json' },
-    { command: 'answer', prefix: [ID, '-r', 'req-1', '-a', 'answer.json'], alias: '-u', key: 'userOk', expected: true },
-    { command: 'retry', prefix: [ID], alias: '-f', value: 'feedback.md', key: 'feedback', expected: 'feedback.md' },
-    { command: 'retry', prefix: [ID, '-f', 'feedback.md'], alias: '-u', key: 'userOk', expected: true },
+    {
+      command: 'send',
+      prefix: [ID],
+      alias: '-m',
+      value: 'message.md',
+      key: 'message',
+      expected: 'message.md',
+    },
+    {
+      command: 'answer',
+      prefix: [ID, '-a', 'answer.json'],
+      alias: '-r',
+      value: 'req-1',
+      key: 'request',
+      expected: 'req-1',
+    },
+    {
+      command: 'answer',
+      prefix: [ID, '-r', 'req-1'],
+      alias: '-a',
+      value: 'answer.json',
+      key: 'answer',
+      expected: 'answer.json',
+    },
+    {
+      command: 'answer',
+      prefix: [ID, '-r', 'req-1', '-a', 'answer.json'],
+      alias: '-u',
+      key: 'userOk',
+      expected: true,
+    },
+    {
+      command: 'retry',
+      prefix: [ID],
+      alias: '-f',
+      value: 'feedback.md',
+      key: 'feedback',
+      expected: 'feedback.md',
+    },
+    {
+      command: 'retry',
+      prefix: [ID, '-f', 'feedback.md'],
+      alias: '-u',
+      key: 'userOk',
+      expected: true,
+    },
   ];
   for (const item of cases) {
     const args = [...item.prefix];
@@ -112,12 +234,14 @@ test('every documented short alias maps to its long option', () => {
 
 test('each short alias letter has exactly one meaning across all commands', () => {
   const meanings = new Map();
-  for (const command of COMMANDS) for (const option of command.options) {
-    if (!option.short) continue;
-    const known = meanings.get(option.short);
-    if (known) assert.equal(known, option.long, `${option.short} means both ${known} and ${option.long}`);
-    else meanings.set(option.short, option.long);
-  }
+  for (const command of COMMANDS)
+    for (const option of command.options) {
+      if (!option.short) continue;
+      const known = meanings.get(option.short);
+      if (known)
+        assert.equal(known, option.long, `${option.short} means both ${known} and ${option.long}`);
+      else meanings.set(option.short, option.long);
+    }
   assert.deepEqual(Object.fromEntries([...meanings].sort()), {
     '-C': '--cwd',
     '-a': '--answer',
@@ -134,8 +258,17 @@ test('each short alias letter has exactly one meaning across all commands', () =
 });
 
 test('every value option also accepts --name=value', () => {
-  const run = parseCommand('run', ['--brief=brief.md', '--cwd=project', '--time-limit=600', '--concurrency=4',
-    '--context-limit=1000', '--provider=route', '--model=name', '--dsh-entry=/opt/dsh/lib/bin.js', '--resource=editor']);
+  const run = parseCommand('run', [
+    '--brief=brief.md',
+    '--cwd=project',
+    '--time-limit=600',
+    '--concurrency=4',
+    '--context-limit=1000',
+    '--provider=route',
+    '--model=name',
+    '--dsh-entry=/opt/dsh/lib/bin.js',
+    '--resource=editor',
+  ]);
   assert.equal(run.options.brief, 'brief.md');
   assert.equal(run.options.cwd, 'project');
   assert.equal(run.options.timeout, '600');
@@ -151,39 +284,81 @@ test('every value option also accepts --name=value', () => {
   const answer = parseCommand('answer', [ID, '--request=req-1', '--answer=answer.json']);
   assert.equal(answer.options.request, 'req-1');
   assert.equal(answer.options.answer, 'answer.json');
-  assert.equal(parseCommand('retry', [ID, '--feedback=feedback.md']).options.feedback, 'feedback.md');
+  assert.equal(
+    parseCommand('retry', [ID, '--feedback=feedback.md']).options.feedback,
+    'feedback.md',
+  );
   assert.equal(parseCommand('unlock', [ID, '--confirm-stopped']).options.confirmStopped, true);
-  assert.deepEqual(parseCommand('run', ['--brief=brief.md', '--patch=a.yml', '--patch=b.yml']).options.patch, ['a.yml', 'b.yml']);
+  assert.deepEqual(
+    parseCommand('run', ['--brief=brief.md', '--patch=a.yml', '--patch=b.yml']).options.patch,
+    ['a.yml', 'b.yml'],
+  );
   // Only the first '=' separates the name from the value.
-  assert.equal(parseCommand('review', [ID, '--verdict=accepted', '--note=a=b']).options.note, 'a=b');
+  assert.equal(
+    parseCommand('review', [ID, '--verdict=accepted', '--note=a=b']).options.note,
+    'a=b',
+  );
   assert.throws(() => parseCommand('run', ['--brief=']), /Missing value for --brief/);
 });
 
 test('renamed and removed options name their replacement', () => {
   const run = ['--brief', 'brief.md'];
-  assert.throws(() => parseCommand('run', [...run, '--timeout', '5']),
-    /Unknown option: --timeout\. 'dsb run' now uses --time-limit <SECONDS>/);
-  assert.throws(() => parseCommand('run', [...run, '--max-concurrent', '2']),
-    /Unknown option: --max-concurrent\. 'dsb run' now uses --concurrency <N>/);
-  assert.equal(messageOf(() => parseCommand('run', [...run, removedExperimentalOption, 'echo'])),
-    `Unknown option: ${removedExperimentalOption}. This experimental option was removed. Run 'dsb run --help' for usage`);
-  assert.equal(messageOf(() => parseCommand('retry', [ID, '--feedback', 'f.md', removedExperimentalOption, 'echo'])),
-    `Unknown option: ${removedExperimentalOption}. This experimental option was removed. Run 'dsb retry --help' for usage`);
-  assert.throws(() => parseCommand('send', [ID, '--message-file', 'a']),
-    /Unknown option: --message-file\. 'dsb send' now uses --message <FILE>/);
-  assert.throws(() => parseCommand('events', [ID, '--after', '0']),
-    /Unknown option: --after\. 'dsb events' now uses --cursor <BYTES>/);
-  assert.throws(() => parseCommand('unlock', [ID, '--confirmed-stopped']),
-    /Unknown option: --confirmed-stopped\. 'dsb unlock' now uses --confirm-stopped/);
+  assert.throws(
+    () => parseCommand('run', [...run, '--timeout', '5']),
+    /Unknown option: --timeout\. 'dsb run' now uses --time-limit <SECONDS>/,
+  );
+  assert.throws(
+    () => parseCommand('run', [...run, '--max-concurrent', '2']),
+    /Unknown option: --max-concurrent\. 'dsb run' now uses --concurrency <N>/,
+  );
+  assert.equal(
+    messageOf(() => parseCommand('run', [...run, removedExperimentalOption, 'echo'])),
+    `Unknown option: ${removedExperimentalOption}. This experimental option was removed. Run 'dsb run --help' for usage`,
+  );
+  assert.equal(
+    messageOf(() =>
+      parseCommand('retry', [ID, '--feedback', 'f.md', removedExperimentalOption, 'echo']),
+    ),
+    `Unknown option: ${removedExperimentalOption}. This experimental option was removed. Run 'dsb retry --help' for usage`,
+  );
+  assert.throws(
+    () => parseCommand('send', [ID, '--message-file', 'a']),
+    /Unknown option: --message-file\. 'dsb send' now uses --message <FILE>/,
+  );
+  assert.throws(
+    () => parseCommand('events', [ID, '--after', '0']),
+    /Unknown option: --after\. 'dsb events' now uses --cursor <BYTES>/,
+  );
+  assert.throws(
+    () => parseCommand('unlock', [ID, '--confirmed-stopped']),
+    /Unknown option: --confirmed-stopped\. 'dsb unlock' now uses --confirm-stopped/,
+  );
   // A hint only applies in the command that used to accept the option.
-  assert.throws(() => parseCommand('send', [ID, '--timeout', '5']), /Unknown option: --timeout\. Run/);
+  assert.throws(
+    () => parseCommand('send', [ID, '--timeout', '5']),
+    /Unknown option: --timeout\. Run/,
+  );
   // Names that kept their meaning keep working.
   assert.equal(parseCommand('wait', [ID, '--timeout', '5']).options.timeout, '5');
 });
 
 test('repeatable options accumulate in order', () => {
-  const parsed = parseCommand('run', ['-b', 'brief.md', '-p', 'a', '--patch=b', '-s', 's1', '--scope=s2',
-    '--resource', 'r1', '--resource=r2', '-i', 'i1', '--image=i2']);
+  const parsed = parseCommand('run', [
+    '-b',
+    'brief.md',
+    '-p',
+    'a',
+    '--patch=b',
+    '-s',
+    's1',
+    '--scope=s2',
+    '--resource',
+    'r1',
+    '--resource=r2',
+    '-i',
+    'i1',
+    '--image=i2',
+  ]);
   assert.deepEqual(parsed.options.patch, ['a', 'b']);
   assert.deepEqual(parsed.options.scope, ['s1', 's2']);
   assert.deepEqual(parsed.options.resource, ['r1', 'r2']);
@@ -191,30 +366,67 @@ test('repeatable options accumulate in order', () => {
 });
 
 test('unknown options, missing values, duplicates, and extra arguments are rejected', () => {
-  assert.throws(() => parseCommand('run', ['--brief', 'brief.md', '--bogus']), /Unknown option: --bogus.*dsb run --help/);
-  assert.throws(() => parseCommand('run', ['--brief']), /Missing value for --brief.*dsb run --help/);
+  assert.throws(
+    () => parseCommand('run', ['--brief', 'brief.md', '--bogus']),
+    /Unknown option: --bogus.*dsb run --help/,
+  );
+  assert.throws(
+    () => parseCommand('run', ['--brief']),
+    /Missing value for --brief.*dsb run --help/,
+  );
   assert.throws(() => parseCommand('run', ['-b']), /Missing value for --brief.*dsb run --help/);
-  assert.throws(() => parseCommand('run', ['--brief', '--cwd', 'project']), /Missing value for --brief/);
-  assert.throws(() => parseCommand('run', ['--brief', 'one.md', '--brief', 'two.md']), /Duplicate option: --brief/);
-  assert.throws(() => parseCommand('run', ['-b', 'one.md', '--brief', 'two.md']), /Duplicate option: --brief/);
-  assert.throws(() => parseCommand('run', ['--brief', 'brief.md', '--cwd', 'one', '--cwd=two']), /Duplicate option: --cwd/);
-  assert.throws(() => parseCommand('run', ['--brief', 'brief.md', '--read-only=true']), /--read-only does not take a value/);
-  assert.throws(() => parseCommand('run', ['--brief', 'brief.md', 'extra']), /Unexpected argument: extra/);
+  assert.throws(
+    () => parseCommand('run', ['--brief', '--cwd', 'project']),
+    /Missing value for --brief/,
+  );
+  assert.throws(
+    () => parseCommand('run', ['--brief', 'one.md', '--brief', 'two.md']),
+    /Duplicate option: --brief/,
+  );
+  assert.throws(
+    () => parseCommand('run', ['-b', 'one.md', '--brief', 'two.md']),
+    /Duplicate option: --brief/,
+  );
+  assert.throws(
+    () => parseCommand('run', ['--brief', 'brief.md', '--cwd', 'one', '--cwd=two']),
+    /Duplicate option: --cwd/,
+  );
+  assert.throws(
+    () => parseCommand('run', ['--brief', 'brief.md', '--read-only=true']),
+    /--read-only does not take a value/,
+  );
+  assert.throws(
+    () => parseCommand('run', ['--brief', 'brief.md', 'extra']),
+    /Unexpected argument: extra/,
+  );
   assert.throws(() => parseCommand('stats', ['extra']), /Unexpected argument: extra/);
 });
 
 test('required options are reported with a command help hint', () => {
   assert.throws(() => parseCommand('run', []), /Missing required option: --brief.*dsb run --help/);
   assert.throws(() => parseCommand('send', ['id']), /Missing required option: --message/);
-  assert.throws(() => parseCommand('answer', ['id', '--request', 'req']), /Missing required option: --answer/);
-  assert.throws(() => parseCommand('answer', ['id', '--answer', 'answer.json']), /Missing required option: --request/);
-  assert.throws(() => parseCommand('review', ['id', '--verdict', 'accepted']), /Missing required option: --note/);
+  assert.throws(
+    () => parseCommand('answer', ['id', '--request', 'req']),
+    /Missing required option: --answer/,
+  );
+  assert.throws(
+    () => parseCommand('answer', ['id', '--answer', 'answer.json']),
+    /Missing required option: --request/,
+  );
+  assert.throws(
+    () => parseCommand('review', ['id', '--verdict', 'accepted']),
+    /Missing required option: --note/,
+  );
   assert.throws(() => parseCommand('unlock', ['id']), /Missing required option: --confirm-stopped/);
 });
 
 test('ID-taking commands reject a missing ID at parse time', () => {
   const cases = {
-    wait: [], status: [], result: [], events: [], cancel: [],
+    wait: [],
+    status: [],
+    result: [],
+    events: [],
+    cancel: [],
     send: ['--message', 'message.md'],
     answer: ['--request', 'req', '--answer', 'answer.json'],
     retry: ['--feedback', 'feedback.md'],
@@ -222,11 +434,16 @@ test('ID-taking commands reject a missing ID at parse time', () => {
     unlock: ['--confirm-stopped'],
   };
   for (const [name, args] of Object.entries(cases))
-    assert.throws(() => parseCommand(name, args), new RegExp(`Missing required argument: <ID>\\. Run 'dsb ${name} --help' for usage`), name);
+    assert.throws(
+      () => parseCommand(name, args),
+      new RegExp(`Missing required argument: <ID>\\. Run 'dsb ${name} --help' for usage`),
+      name,
+    );
 });
 
 test('global help, command help, and version dispatch', () => {
-  for (const argv of [[], ['-h'], ['--help'], ['help']]) assert.deepEqual(parse(argv), { action: 'help', command: null }, argv.join(' '));
+  for (const argv of [[], ['-h'], ['--help'], ['help']])
+    assert.deepEqual(parse(argv), { action: 'help', command: null }, argv.join(' '));
   assert.deepEqual(parse(['help', 'run']), { action: 'help', command: 'run' });
   assert.deepEqual(parse(['run', '--help']), { action: 'help', command: 'run' });
   assert.deepEqual(parse(['run', '-h']), { action: 'help', command: 'run' });
@@ -259,9 +476,18 @@ test('top-level and command help contain every command and option', () => {
     for (const option of item.options) {
       const label = option.short ? `${option.short}, ${option.long}` : option.long;
       assert.ok(help.includes(label), `${item.name}: ${label}`);
-      if (option.value) assert.ok(help.includes(`${option.long} <${option.value}>`), `${item.name}: ${option.long} ${option.value}`);
-      if (option.required) assert.ok(flatHelp.includes('[required]'), `${item.name}: ${option.long} required`);
-      if (option.default !== undefined) assert.ok(flatHelp.includes(`[default: ${option.default}]`), `${item.name}: ${option.long} default`);
+      if (option.value)
+        assert.ok(
+          help.includes(`${option.long} <${option.value}>`),
+          `${item.name}: ${option.long} ${option.value}`,
+        );
+      if (option.required)
+        assert.ok(flatHelp.includes('[required]'), `${item.name}: ${option.long} required`);
+      if (option.default !== undefined)
+        assert.ok(
+          flatHelp.includes(`[default: ${option.default}]`),
+          `${item.name}: ${option.long} default`,
+        );
     }
     if (item.positionals.length) assert.match(help, /^Arguments:$/m, item.name);
   }
@@ -292,8 +518,8 @@ test('help uses the documented aliases, value names, and has no notify option', 
 });
 
 test('help has no Notes section and keeps essentials in option descriptions', () => {
-  const flat = text => text.replace(/\s+/g, ' ');
-  const all = [rootHelp(), ...COMMANDS.map(command => commandHelp(command.name))].join('\n');
+  const flat = (text) => text.replace(/\s+/g, ' ');
+  const all = [rootHelp(), ...COMMANDS.map((command) => commandHelp(command.name))].join('\n');
   assert.doesNotMatch(all, /^Notes:$/m);
   const root = flat(rootHelp());
   assert.match(root, /DPSK_PROVIDER Default model route \(default: deepseek-official\)/);
@@ -301,25 +527,34 @@ test('help has no Notes section and keeps essentials in option descriptions', ()
   assert.match(root, /DPSK_CONCURRENCY .*default: 8/);
   const wait = flat(commandHelp('wait'));
   assert.match(wait, /finishes, needs an answer, or times out/);
-  assert.match(wait, /1\.\.3600/); assert.match(wait, /default: 600/);
+  assert.match(wait, /1\.\.3600/);
+  assert.match(wait, /default: 600/);
   const review = flat(commandHelp('review'));
   assert.ok(review.includes('{"currency":"CNY","source":"...","deepseekCost":0.12}'));
   assert.match(review, /every key ending in Cost is recorded, omit unknown costs/);
   assert.match(flat(commandHelp('events')), /Byte cursor from a previous events response/);
   const run = flat(commandHelp('run'));
   assert.match(run, /Cooperative write scope, not a sandbox/);
-  assert.match(run, /--dsh-entry <FILE>/); assert.match(run, /Advanced\/debug/);
+  assert.match(run, /--dsh-entry <FILE>/);
+  assert.match(run, /Advanced\/debug/);
   assert.match(run, /--time-limit <SECONDS> Job time limit/);
   assert.match(flat(commandHelp('answer')), /--request <REQUEST_ID>.*--answer <FILE>/);
 });
 
 test('guard-rail flags parse and appear in help', () => {
-  assert.equal(parseCommand('answer', [ID, '--request', 'req', '--answer', 'answer.json', '--user-ok']).options.userOk, true);
+  assert.equal(
+    parseCommand('answer', [ID, '--request', 'req', '--answer', 'answer.json', '--user-ok']).options
+      .userOk,
+    true,
+  );
   const retry = parseCommand('retry', [ID, '--feedback', 'feedback.md', '--resume', '--user-ok']);
   assert.equal(retry.options.resume, true);
   assert.equal(retry.options.userOk, true);
-  assert.equal(parseCommand('run', ['--brief', 'brief.md', '--context-limit', '5000']).options.contextLimit, '5000');
-  const flat = text => text.replace(/\s+/g, ' ');
+  assert.equal(
+    parseCommand('run', ['--brief', 'brief.md', '--context-limit', '5000']).options.contextLimit,
+    '5000',
+  );
+  const flat = (text) => text.replace(/\s+/g, ' ');
   assert.match(flat(commandHelp('answer')), /--user-ok.*3-question job cap/);
   assert.match(flat(commandHelp('retry')), /--resume.*timeout or unanswered question/);
   assert.match(flat(commandHelp('retry')), /--user-ok.*one-rework task cap/);
@@ -328,13 +563,13 @@ test('guard-rail flags parse and appear in help', () => {
 });
 
 test('long descriptions wrap to 100 columns by default and remain aligned', () => {
-  const helps = [rootHelp(), ...COMMANDS.map(item => commandHelp(item.name))];
+  const helps = [rootHelp(), ...COMMANDS.map((item) => commandHelp(item.name))];
   for (const help of helps) {
     for (const line of help.split('\n')) assert.ok(line.length <= 100, `${line.length}: ${line}`);
   }
   const run = commandHelp('run');
-  const cwd = run.split('\n').find(line => line.includes('--cwd <DIR>'));
-  const brief = run.split('\n').find(line => line.includes('Task brief (UTF-8)'));
+  const cwd = run.split('\n').find((line) => line.includes('--cwd <DIR>'));
+  const brief = run.split('\n').find((line) => line.includes('Task brief (UTF-8)'));
   assert.ok(cwd && brief);
   assert.equal(cwd.indexOf('Project directory'), brief.indexOf('Task brief (UTF-8)'));
 });
@@ -343,7 +578,7 @@ test('a narrower width wraps option descriptions and keeps the indent', () => {
   const help = commandHelp('run', { columns: 80 });
   for (const line of help.split('\n')) assert.ok(line.length <= 80, `${line.length}: ${line}`);
   const lines = help.split('\n');
-  const first = lines.findIndex(line => line.includes('--concurrency'));
+  const first = lines.findIndex((line) => line.includes('--concurrency'));
   assert.ok(first >= 0);
   const descriptionColumn = lines[first].indexOf('Maximum concurrent');
   assert.ok(descriptionColumn > 0);
@@ -377,23 +612,41 @@ async function runCli(t, report) {
   fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
   const entry = path.join(root, 'runtime', 'lib', 'bin.mjs');
   fs.writeFileSync(entry, cliRuntime(report));
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: dshVersion }));
-  const brief = path.join(root, 'brief.md'); fs.writeFileSync(brief, 'cli exit code');
+  fs.writeFileSync(
+    path.join(root, 'runtime', 'package.json'),
+    JSON.stringify({ version: dshVersion }),
+  );
+  const brief = path.join(root, 'brief.md');
+  fs.writeFileSync(brief, 'cli exit code');
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [dsbBin, 'run', '--brief', brief, '--dsh-entry', entry, '--cwd', root, '--time-limit', '20'], {
-      env: { ...process.env, DSH_HOME: root }, windowsHide: true,
+    const child = spawn(
+      process.execPath,
+      [dsbBin, 'run', '--brief', brief, '--dsh-entry', entry, '--cwd', root, '--time-limit', '20'],
+      {
+        env: { ...process.env, DSH_HOME: root },
+        windowsHide: true,
+      },
+    );
+    let stdout = '',
+      stderr = '';
+    child.stdout.on('data', (data) => {
+      stdout += data;
     });
-    let stdout = '', stderr = '';
-    child.stdout.on('data', data => { stdout += data; });
-    child.stderr.on('data', data => { stderr += data; });
+    child.stderr.on('data', (data) => {
+      stderr += data;
+    });
     child.once('error', reject);
-    child.once('close', code => resolve({ code, stdout, stderr }));
+    child.once('close', (code) => resolve({ code, stdout, stderr }));
   });
 }
 
-test('bin/dsb.mjs exits 0 for a completed OK run and 1 for a completed non-OK run', { timeout: 60000 }, async t => {
-  const ok = await runCli(t, 'RESULT: OK');
-  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
-  const failed = await runCli(t, 'RESULT: FAIL');
-  assert.equal(failed.code, 1, failed.stdout + failed.stderr);
-});
+test(
+  'bin/dsb.mjs exits 0 for a completed OK run and 1 for a completed non-OK run',
+  { timeout: 60000 },
+  async (t) => {
+    const ok = await runCli(t, 'RESULT: OK');
+    assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+    const failed = await runCli(t, 'RESULT: FAIL');
+    assert.equal(failed.code, 1, failed.stdout + failed.stderr);
+  },
+);

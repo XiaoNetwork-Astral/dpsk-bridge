@@ -4,7 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const dshVersion = JSON.parse(fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).dshVersion;
+const dshVersion = JSON.parse(
+  fs.readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+).dshVersion;
 
 // A keyless SDK runtime. The first prompt selects a mode: "simple" finishes
 // immediately, "chat" waits for both a follow-up message and an answer, and
@@ -74,8 +76,17 @@ export function setup(t, brief) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
-  const entry = path.join(root, 'runtime', 'lib', 'bin.mjs'); fs.writeFileSync(entry, fake);
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: dshVersion }));
-  const briefFile = path.join(root, 'brief.md'); fs.writeFileSync(briefFile, brief);
-  return { root, home: path.join(root, 'bridge'), options: { cwd: root, brief: briefFile, dshEntry: entry, timeout: 10 } };
+  const entry = path.join(root, 'runtime', 'lib', 'bin.mjs');
+  fs.writeFileSync(entry, fake);
+  fs.writeFileSync(
+    path.join(root, 'runtime', 'package.json'),
+    JSON.stringify({ version: dshVersion }),
+  );
+  const briefFile = path.join(root, 'brief.md');
+  fs.writeFileSync(briefFile, brief);
+  return {
+    root,
+    home: path.join(root, 'bridge'),
+    options: { cwd: root, brief: briefFile, dshEntry: entry, timeout: 10 },
+  };
 }

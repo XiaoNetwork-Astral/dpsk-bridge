@@ -5,7 +5,10 @@ import { reportState } from '../lib/bridge.mjs';
 test('the verdict is read from its own line near the top of the final reply', () => {
   assert.equal(reportState('RESULT: OK\nDone.'), 'OK');
   assert.equal(reportState('﻿  RESULT: FAIL — tests failed'), 'FAIL');
-  assert.equal(reportState('Implemented the change.\n\n**RESULT: BLOCKED**\nNeeds a decision.'), 'BLOCKED');
+  assert.equal(
+    reportState('Implemented the change.\n\n**RESULT: BLOCKED**\nNeeds a decision.'),
+    'BLOCKED',
+  );
   assert.equal(reportState('Summary\r\nRESULT: OK\r\n'), 'OK');
 });
 

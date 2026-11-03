@@ -45,18 +45,36 @@ function runCleanup(home, prefix, bin, args = []) {
   const env = environment(home, prefix, bin);
   if (windows) {
     // PATH is restricted above, so start Windows PowerShell by its full path.
-    const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0',
-      'powershell.exe');
-    return spawnSync(powershell,
-      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', cleanupPath, ...args],
-      { env, encoding: 'utf8', timeout: 120000, windowsHide: true });
+    const powershell = path.join(
+      process.env.SystemRoot || 'C:\\Windows',
+      'System32',
+      'WindowsPowerShell',
+      'v1.0',
+      'powershell.exe',
+    );
+    return spawnSync(
+      powershell,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        cleanupPath,
+        ...args,
+      ],
+      { env, encoding: 'utf8', timeout: 120000, windowsHide: true },
+    );
   }
   return spawnSync('bash', [cleanupPath, ...args], { env, encoding: 'utf8', timeout: 120000 });
 }
 
 function writeSkill(directory, name) {
   fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(path.join(directory, 'SKILL.md'), `---\nname: ${name}\ndescription: test skill\n---\n\nTest skill.\n`);
+  fs.writeFileSync(
+    path.join(directory, 'SKILL.md'),
+    `---\nname: ${name}\ndescription: test skill\n---\n\nTest skill.\n`,
+  );
 }
 
 function writeShim(file, target) {
@@ -73,7 +91,7 @@ function shimPath(prefix, name) {
   return windows ? path.join(prefix, `${name}.cmd`) : path.join(prefix, 'bin', name);
 }
 
-test('cleanup --help exits 0 and documents the removal rules', t => {
+test('cleanup --help exits 0 and documents the removal rules', (t) => {
   const { home, prefix, bin } = profile(t);
   const result = runCleanup(home, prefix, bin, ['--help']);
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -83,14 +101,14 @@ test('cleanup --help exits 0 and documents the removal rules', t => {
   assert.match(result.stdout, /left alone/);
 });
 
-test('cleanup rejects unknown arguments', t => {
+test('cleanup rejects unknown arguments', (t) => {
   const { home, prefix, bin } = profile(t);
   const result = runCleanup(home, prefix, bin, ['uninstall']);
   assert.notEqual(result.status, 0);
   assert.match(result.stdout + result.stderr, /Unknown argument/);
 });
 
-test('cleanup removes confirmed skills and launchers, keeps everything else', t => {
+test('cleanup removes confirmed skills and launchers, keeps everything else', (t) => {
   const { home, prefix, bin } = profile(t);
   const state = path.join(home, '.dpsk-bridge');
   const claudeSkills = path.join(home, '.claude', 'skills');
@@ -102,7 +120,10 @@ test('cleanup removes confirmed skills and launchers, keeps everything else', t 
   fs.writeFileSync(path.join(state, 'install.json'), '{}\n');
   fs.writeFileSync(path.join(state, 'installed-skills.host.json'), '{}\n');
   fs.writeFileSync(path.join(state, 'installed-skills-codex.host.json'), '{}\n');
-  fs.writeFileSync(path.join(state, 'installed-skills-generic-ABCDEF0123456789.txt'), 'some-skill\n');
+  fs.writeFileSync(
+    path.join(state, 'installed-skills-generic-ABCDEF0123456789.txt'),
+    'some-skill\n',
+  );
 
   // Owned through the Claude manifest, owned through the allowlist, and two
   // folders that must be kept: an unrelated skill and an unconfirmed dsh-mcp.
@@ -118,7 +139,10 @@ test('cleanup removes confirmed skills and launchers, keeps everything else', t 
   if (windows) {
     writeWindowsShim(path.join(bin, 'dsb.cmd'), 'dpsk-bridge\\bin\\dsb.mjs');
     writeWindowsShim(shimPath(prefix, 'dsv'), 'dpsk-bridge\\bin\\dsv.mjs');
-    fs.writeFileSync(path.join(bin, 'dsh.cmd'), '@ECHO off\r\nnode "%dp0%\\..\\.dsh\\bin\\dsv.mjs" %*\r\n');
+    fs.writeFileSync(
+      path.join(bin, 'dsh.cmd'),
+      '@ECHO off\r\nnode "%dp0%\\..\\.dsh\\bin\\dsv.mjs" %*\r\n',
+    );
   } else {
     writeShim(path.join(bin, 'dsb'), 'dpsk-bridge/bin/dsb.mjs');
     writeShim(shimPath(prefix, 'dsv'), 'dpsk-bridge/bin/dsv.mjs');
@@ -147,18 +171,43 @@ test('cleanup removes confirmed skills and launchers, keeps everything else', t 
   ]) {
     assert.equal(fs.existsSync(kept), true, `${kept} must be kept`);
   }
-  for (const record of ['install.json', 'installed-skills.txt', 'installed-skills.host.json',
-    'installed-skills-codex.txt', 'installed-skills-codex.host.json']) {
-    assert.equal(fs.existsSync(path.join(state, record)), false, `${record} must be removed so the next install starts fresh`);
+  for (const record of [
+    'install.json',
+    'installed-skills.txt',
+    'installed-skills.host.json',
+    'installed-skills-codex.txt',
+    'installed-skills-codex.host.json',
+  ]) {
+    assert.equal(
+      fs.existsSync(path.join(state, record)),
+      false,
+      `${record} must be removed so the next install starts fresh`,
+    );
   }
   assert.equal(fs.existsSync(shimPath(bin, 'dsb')), false, 'the PATH launcher must be removed');
-  assert.equal(fs.existsSync(shimPath(prefix, 'dsv')), false, 'the npm-prefix launcher must be removed');
+  assert.equal(
+    fs.existsSync(shimPath(prefix, 'dsv')),
+    false,
+    'the npm-prefix launcher must be removed',
+  );
 
-  const backups = fs.readdirSync(path.join(state, 'backups')).filter(name => name.endsWith('.bak'));
+  const backups = fs
+    .readdirSync(path.join(state, 'backups'))
+    .filter((name) => name.endsWith('.bak'));
   assert.equal(backups.length, 3, 'each removed skill folder must be backed up');
-  assert.ok(backups.some(name => name.includes('deepseek-delegate')), 'the backup name must identify the skill');
-  const delegateBackup = path.join(state, 'backups', backups.find(name => name.includes('deepseek-delegate')));
-  assert.ok(fs.existsSync(path.join(delegateBackup, 'SKILL.md')), 'the backup must contain the skill files');
+  assert.ok(
+    backups.some((name) => name.includes('deepseek-delegate')),
+    'the backup name must identify the skill',
+  );
+  const delegateBackup = path.join(
+    state,
+    'backups',
+    backups.find((name) => name.includes('deepseek-delegate')),
+  );
+  assert.ok(
+    fs.existsSync(path.join(delegateBackup, 'SKILL.md')),
+    'the backup must contain the skill files',
+  );
 
   assert.match(result.stdout, /Removed Claude skill deepseek-delegate/);
   assert.match(result.stdout, /Kept Claude skill notes-to-self/);
@@ -168,7 +217,7 @@ test('cleanup removes confirmed skills and launchers, keeps everything else', t 
   assert.match(next, /installer\.(sh|ps1)/, 'the last line must be the install command');
 });
 
-test('cleanup leaves an install with nothing to remove unchanged', t => {
+test('cleanup leaves an install with nothing to remove unchanged', (t) => {
   const { home, prefix, bin } = profile(t);
   const result = runCleanup(home, prefix, bin);
   assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -176,5 +225,9 @@ test('cleanup leaves an install with nothing to remove unchanged', t => {
   assert.match(result.stdout, /No Codex skills directory/);
   assert.match(result.stdout, /No dsb or dsv launcher found/);
   assert.match(result.stdout, /Nothing was removed/);
-  assert.equal(fs.existsSync(path.join(home, '.dpsk-bridge')), false, 'cleanup must not create the state directory when there is nothing to do');
+  assert.equal(
+    fs.existsSync(path.join(home, '.dpsk-bridge')),
+    false,
+    'cleanup must not create the state directory when there is nothing to do',
+  );
 });
