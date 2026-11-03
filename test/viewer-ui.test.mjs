@@ -316,6 +316,37 @@ test('split escape sequences wait for the next chunk while a lone Escape is flus
   assert.deepEqual(parseInput('A', noContinue).map(token => token.key), ['escape', 'A']);
 });
 
+test('merged plan calls keep the header and reading overview tool-call counts equal', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsv-plan-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  let seq = 0;
+  const event = (type, data) => ({ type, seq: ++seq, time: 1700000000000 + seq, data });
+  const rows = [{ type: 'session', version: 4, id: 'plan-count', cwd: '/work/plan', createdAt: 1700000000000 },
+    event('session/title', { title: 'PLAN_COUNT_TASK' }), event('turn/start', { turn: 1 }),
+    event('user/message', { source: { kind: 'user' }, content: [{ type: 'text', text: 'plan the work' }] }),
+    event('tool/call', { turn: 1, step: 1, callId: 'plan-1', name: 'todo_write', arguments: JSON.stringify({ todos: [{ content: 'one' }] }) }),
+    event('tool/result', { turn: 1, step: 1, message: { role: 'tool', toolCallId: 'plan-1', content: [{ type: 'text', text: 'saved' }] } }),
+    event('tool/call', { turn: 1, step: 2, callId: 'plan-2', name: 'todo_write', arguments: JSON.stringify({ todos: [{ content: 'two' }] }) }),
+    event('tool/result', { turn: 1, step: 2, message: { role: 'tool', toolCallId: 'plan-2', content: [{ type: 'text', text: 'saved' }] } }),
+    event('tool/call', { turn: 1, step: 3, callId: 'shell-1', name: 'shell', arguments: JSON.stringify({ command: 'false' }) }),
+    event('tool/result', { turn: 1, step: 3, message: { role: 'tool', toolCallId: 'shell-1', isError: true, content: [{ type: 'text', text: 'failed' }] } }),
+    event('assistant/message', { turn: 1, step: 4, message: { content: [{ type: 'text', text: 'RESULT: FAIL\nonly the plan was saved' }] } }),
+    event('turn/end', { turn: 1, reason: { kind: 'error', error: { message: 'provider failure' } } })];
+  const directory = path.join(root, 'project', 'plan-count');
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(path.join(directory, 'session.v4.jsonl'), rows.map(JSON.stringify).join('\n') + '\n');
+  const lines = [];
+  t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+  const run = flags => { lines.length = 0; show('plan-count', flags, { root }); return lines.join('\n'); };
+  const full = run({ full: true }), reading = run({});
+  const headerCount = Number(/(\d+) tool call/.exec(full)?.[1]);
+  const overviewCount = Number(/(\d+) tool call/.exec(reading)?.[1]);
+  assert.equal(headerCount, 3, 'two plan calls plus one failed tool call');
+  assert.equal(overviewCount, headerCount);
+  assert.match(reading, /\(2 plan updates shown as one note\)/);
+  assert.match(full, /✗ Failed/);
+});
+
 test('show reports a read error as one line instead of throwing', t => {
   const root = fixture(t);
   const errors = [];

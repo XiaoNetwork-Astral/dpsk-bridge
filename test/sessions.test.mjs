@@ -177,8 +177,9 @@ test('async discovery selects the same generations and the async reader enforces
   for (const name of ['session.v04.jsonl', 'session.v0.jsonl', 'session.v99.jsonl.tmp']) write(root, `project/id/${name}`, 'bad');
   write(root, 'direct/session.v4.jsonl.zstd', zlib.zstdCompressSync(jsonl([header(4, 'direct')])));
   const sync = listSessionFiles(root), async = await listSessionFilesAsync(root);
-  assert.deepEqual(async.map(({ id, file, version, compressed }) => ({ id, file, version, compressed })),
-    sync.map(({ id, file, version, compressed }) => ({ id, file, version, compressed })));
+  const fields = ({ id, file, version, compressed, size }) => ({ id, file, version, compressed, size });
+  assert.deepEqual(async.map(fields), sync.map(fields));
+  assert.equal(sync.find(item => item.id === 'id').size, fs.statSync(newest).size, 'sync discovery keeps the size the store uses to pick the reader');
   assert.equal(async.find(item => item.id === 'id').file, newest);
   const data = jsonl([header(), event('turn/start', { turn: 1 })]);
   const plain = write(root, 'plain/session.v4.jsonl', data);
