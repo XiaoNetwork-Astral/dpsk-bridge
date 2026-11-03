@@ -19,7 +19,6 @@
   },
   "files": [
     "bin",
-    "docs",
     "installer.ps1",
     "installer.sh",
     "lib",

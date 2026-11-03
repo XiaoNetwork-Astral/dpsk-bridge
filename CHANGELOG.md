@@ -3,6 +3,25 @@
 All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- One-line installers for every platform: `installer.ps1` (Windows) and `installer.sh` (Linux and macOS), published as release assets. Each installs, upgrades, and uninstalls; piped runs take `DPSK_ACTION`, `DPSK_TARGET`, `DPSK_SKILLS_DIR`, `DPSK_UNINSTALL_ALL`, and `DPSK_INSTALL_DIR`.
+- Hosts are detected automatically (Claude from `~/.claude`, Codex from `~/.agents` or `~/.codex`) when none is chosen.
+
+### Changed
+
+- All install logic lives in one Node script, `scripts/installer-core.mjs`, so Windows, Linux, and macOS behave the same; skill sync after `dsv update` now works on Linux and macOS too.
+- Upgrading from 0.4.x upgrades the existing checkout in place; upgrades wait for running bridge jobs like `dsv update`.
+- The minimum dsh version is defined once, in `package.json` (`dshVersion`).
+- The usage reference is merged into `README.md` / `README.zh.md`.
+
+### Removed
+
+- `scripts/install.ps1`; use `installer.ps1`.
+- `docs/usage.md`; see the README.
+
 ## [0.5.0] - 2026-11-03
 
 ### Breaking
