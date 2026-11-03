@@ -71,8 +71,11 @@ function targetArgs(...names) {
 
 function allArgs() { return windows ? ['-All'] : ['--all']; }
 
+// Fixtures pin core.autocrlf so that line endings committed here match what
+// the wrapper sees later with GIT_CONFIG_NOSYSTEM (GitHub's Windows runners set
+// core.autocrlf=true in the system config).
 function git(cwd, args) {
-  const result = spawnSync('git', ['-c', `safe.directory=${cwd}`, '-c', 'user.name=Wrapper test',
+  const result = spawnSync('git', ['-c', `safe.directory=${cwd}`, '-c', 'core.autocrlf=false', '-c', 'user.name=Wrapper test',
     '-c', 'user.email=wrapper@example.invalid', '-c', 'commit.gpgSign=false', '-c', 'tag.gpgSign=false', ...args],
   { cwd, encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
