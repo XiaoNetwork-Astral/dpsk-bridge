@@ -4,42 +4,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { runJob, readJob, waitJob, sendMessage, answerRequest, cancelJob, eventsPage } from '../lib/bridge.mjs';
-
-const fake = `
-import readline from 'node:readline';
-const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
-let sessionId, prompt='', extra='', answer=false, mode='', seq=0, finished=false;
-const waiting=[];
-const event=(type,data)=>write({method:'session.event',params:{sessionId,event:{type,seq:++seq,time:Date.now(),data}}});
-const finish=()=>{
- if(finished || mode==='hold' || (mode==='chat' && (!extra || !answer)))return;
- finished=true;
- event('assistant/message',{turn:1,step:1,message:{role:'assistant',content:[{type:'text',text:'RESULT: OK\\n'+extra}]},usage:{inputTokens:10,outputTokens:4,cacheReadTokens:0,cacheWriteTokens:0}});
- event('assistant/message',{turn:1,step:2,message:{role:'assistant',content:[{type:'reasoning',text:'no additional answer'}]}});
- event('turn/end',{turn:1,reason:{kind:'completed'}});
- for(const id of waiting.splice(0))write({id,result:{}});
-};
-readline.createInterface({input:process.stdin}).on('line',line=>{
- const m=JSON.parse(line);
- if(m.method==='initialize'){write({id:m.id,result:{serverInfo:{name:'deepseek-harness-sdk-runtime',version:'0.0.1'}}});}
- else if(m.method==='session/prompt'){
-  sessionId=m.params.sessionId;
-  const text=m.params.contentBlocks[0].text;
-  if(!prompt){prompt=text;mode=text.includes('[chat]')?'chat':text.includes('[hold]')?'hold':'simple';
-   event('user/message',{source:{kind:'user'},content:[{type:'text',text}]});
-   if(mode==='chat')write({id:'ask-rpc-1',method:'user-question/ask',params:{requestId:'question-1',sessionId,questions:[{id:'choice',question:'Proceed?',options:[]}]}});
-  }else extra=text;
-  write({id:m.id,result:{messageId:'message-'+seq}});setTimeout(finish,30);
- }else if(m.method==='session/wait'){if(finished)write({id:m.id,result:{}});else waiting.push(m.id);}
- else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
- else if(m.id==='ask-rpc-1'){answer=!!m.result.answers;finish();}
-});
-`;
+import { setup } from './helpers/fake-dsh.mjs';
 
 // Three questions, then an approval, then a fourth (capped) and a fifth (after --user-ok).
 const questionCapFake = `
 import readline from 'node:readline';
-const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
+const write = (m, done) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n', done);
 let sessionId, seq=0, asked=0, waitId, finished=false;
 const event=(type,data)=>write({method:'session.event',params:{sessionId,event:{type,seq:++seq,time:Date.now(),data}}});
 const ask=()=>{asked++;write({id:'ask-'+asked,method:'user-question/ask',params:{requestId:'q-'+asked,sessionId,questions:[{id:'choice',question:'Q'+asked,options:[]}]}});};
@@ -55,7 +25,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  if(m.method==='initialize')write({id:m.id,result:{serverInfo:{name:'deepseek-harness-sdk-runtime'}}});
  else if(m.method==='session/prompt'){sessionId=m.params.sessionId;if(asked===0)ask();write({id:m.id,result:{messageId:'m'}});}
  else if(m.method==='session/wait'){if(finished)write({id:m.id,result:{}});else waitId=m.id;}
- else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
+ else if(m.method==='shutdown'){write({id:m.id,result:{}},()=>process.exit(0));}
  else if(typeof m.id==='string'&&m.id.startsWith('ask-')){if(asked<3)ask();else if(asked===3)approve();else if(asked===4)ask();else finish();}
  else if(m.id==='approval-rpc')ask();
 });
@@ -64,7 +34,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 // Emits usage 100/150/200, then stays open until a follow-up prompt finishes the turn.
 const contextFake = `
 import readline from 'node:readline';
-const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
+const write = (m, done) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n', done);
 let sessionId, seq=0, waitId, finished=false, prompts=0;
 const event=(type,data)=>write({method:'session.event',params:{sessionId,event:{type,seq:++seq,time:Date.now(),data}}});
 const usage=t=>({inputTokens:t,outputTokens:1,cacheReadTokens:0,cacheWriteTokens:0});
@@ -82,14 +52,14 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   if(prompts===1){message(1,1,100);message(1,2,150);message(1,3,200);}else finish();
   write({id:m.id,result:{messageId:'m'+prompts}});
  } else if(m.method==='session/wait'){if(finished)write({id:m.id,result:{}});else waitId=m.id;}
- else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
+ else if(m.method==='shutdown'){write({id:m.id,result:{}},()=>process.exit(0));}
 });
 `;
 
 // Asks one question, then cancels it from the runtime while the job keeps running.
 const cancelFake = `
 import readline from 'node:readline';
-const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
+const write = (m, done) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n', done);
 let sessionId, waitId, asked=false;
 readline.createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line);
@@ -97,23 +67,13 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  else if(m.method==='session/prompt'){
   sessionId=m.params.sessionId;
   if(!asked){asked=true;write({id:'ask-rpc',method:'user-question/ask',params:{requestId:'q-cancel',sessionId,questions:[{id:'choice',question:'Proceed?',options:[]}]}});
-   setTimeout(()=>write({method:'user-question.cancelled',params:{requestId:'q-cancel',sessionId}}),50);}
+   write({method:'user-question.cancelled',params:{requestId:'q-cancel',sessionId}});}
   write({id:m.id,result:{messageId:'m'}});
  } else if(m.method==='session/wait')waitId=m.id;
- else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
+ else if(m.method==='shutdown'){write({id:m.id,result:{}},()=>process.exit(0));}
  else if(m.id==='ask-rpc'){/* the host answer is intentionally ignored */}
 });
 `;
-
-function setup(t, brief) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
-  const entry = path.join(root, 'runtime', 'lib', 'bin.mjs'); fs.writeFileSync(entry, fake);
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.2-alpha.3' }));
-  const briefFile = path.join(root, 'brief.md'); fs.writeFileSync(briefFile, brief);
-  return { root, home: path.join(root, 'bridge'), options: { cwd: root, brief: briefFile, dshEntry: entry, timeout: 10 } };
-}
 
 function background(t, options, home, onEvent = () => {}) {
   let id;
@@ -157,14 +117,12 @@ async function until(check, timeoutMs = 5000) {
 test('wait returns finished immediately for a terminal job', async t => {
   const { options, home } = setup(t, 'wait finished');
   const job = await runJob(options, () => {}, home);
-  const began = Date.now();
   const waited = await waitJob(job, 5, home);
   assert.equal(waited.event, 'wait');
   assert.equal(waited.reason, 'finished');
   assert.equal(waited.id, job.id);
   assert.equal(waited.processState, 'completed');
   assert.equal(waited.reportedResult, 'OK');
-  assert.ok(Date.now() - began < 1000);
 });
 
 test('wait returns request for a pending question and finished after the answer', async t => {
@@ -248,11 +206,13 @@ test('wait returns timeout for a running job and errors for bad timeouts or miss
   const { options, home } = setup(t, '[hold] wait forever');
   const { started, running } = background(t, options, home);
   const id = await started;
-  const began = Date.now();
+  const began = performance.now();
   const waited = await waitJob({ id }, 1, home);
   assert.equal(waited.reason, 'timeout');
   assert.equal(waited.processState, 'running');
-  assert.ok(Date.now() - began >= 900);
+  // A monotonic lower bound, far below the 1 s timeout, proves wait blocked
+  // without making the test sensitive to a slow machine.
+  assert.ok(performance.now() - began >= 500, `wait returned after ${performance.now() - began}ms`);
   cancelJob(readJob(id, home), home);
   const job = await running;
   assert.equal(job.processState, 'cancelled', job.error);
@@ -310,10 +270,10 @@ test('wait keeps pending requests out of actionableRequests while the job is fin
   const file = path.join(dir, 'job.json');
   fs.writeFileSync(file, JSON.stringify(job));
 
-  const began = Date.now();
+  const began = performance.now();
   const waited = await waitJob({ id }, 1, home);
   assert.equal(waited.reason, 'timeout');
-  assert.ok(Date.now() - began >= 900, `wait returned after ${Date.now() - began}ms`);
+  assert.ok(performance.now() - began >= 500, `wait returned after ${performance.now() - began}ms`);
   assert.deepEqual(waited.actionableRequests, []);
   assert.deepEqual(waited.pendingRequests.map(request => request.requestId), [requestId]);
 

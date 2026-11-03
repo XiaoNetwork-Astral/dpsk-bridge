@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
@@ -10,7 +10,7 @@ import { runSdk, queueInput, eventsPage } from '../lib/live.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) {
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + 10000;
   for (;;) {
     const value = check(); if (value) return value;
     if (Date.now() > deadline) throw new Error('Timed out waiting for fake SDK');
@@ -20,6 +20,9 @@ async function until(check) {
 class FakeChild extends EventEmitter {
   constructor() {
     super(); this.stdout = new PassThrough(); this.received = [];
+    // Only an unanswered session/wait can finish the job. Clearing the flag on
+    // finish prevents a later test step from answering a stale id.
+    this.waiting = null;
     this.stdin = new Writable({ write: (chunk, encoding, done) => {
       const message = JSON.parse(chunk.toString().trim());
       queueMicrotask(() => this.receive(message)); done();
@@ -47,15 +50,17 @@ class FakeChild extends EventEmitter {
   }
   cancel(requestId) { this.send({ method: 'user-question.cancelled', params: { requestId, sessionId: 'root-session' } }); }
   finish() {
-    assert.ok(this.waiting);
+    assert.ok(this.waiting, 'a session/wait must be pending');
+    const id = this.waiting;
+    this.waiting = null;
     this.send({ method: 'session.event', params: { sessionId: this.sessionId, event: { type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: 'RESULT: OK\nFinished.' }] } } } } });
     this.send({ method: 'session.event', params: { sessionId: this.sessionId, event: { type: 'turn/end', data: { reason: { kind: 'completed' } } } } });
-    this.send({ id: this.waiting, result: {} });
+    this.send({ id, result: {} });
   }
 }
 function fixture(t, emit = () => {}, signal = null) {
-  const root = fs.mkdtempSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'live-fixture-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'live-fixture-'));
   const home = path.join(root, 'home'), id = randomUUID(), dir = path.join(home, 'jobs', id);
   fs.mkdirSync(path.join(dir, 'inbox'), { recursive: true });
   const job = { id, cwd: root, sdkSessionId: 'root-session', provider: 'fake', model: 'fake',
@@ -170,11 +175,11 @@ test('an already aborted signal rejects the session instead of running it', asyn
   const f = fixture(t, () => {}, controller.signal);
   await assert.rejects(f.task, /Already cancelled/);
   assert.equal(fs.existsSync(f.job.reportFile), false);
-  assert.equal(f.child.waiting, undefined);
+  assert.equal(f.child.waiting, null);
 });
 
 test('eventsPage ignores an unterminated tail and reports no more pages', async t => {
-  const root = fs.mkdtempSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'events-fixture-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'events-fixture-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'events.jsonl'), job = { id: 'events-job', eventsFile: file };
   const line = event => JSON.stringify({ event }) + '\n';
@@ -187,7 +192,7 @@ test('eventsPage ignores an unterminated tail and reports no more pages', async 
 });
 
 test('eventsPage keeps more true while complete records remain past the limit', async t => {
-  const root = fs.mkdtempSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'events-fixture-'));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'events-fixture-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'events.jsonl'), job = { id: 'events-job', eventsFile: file };
   fs.writeFileSync(file, ['first', 'second', 'third'].map(event => JSON.stringify({ event }) + '\n').join(''));

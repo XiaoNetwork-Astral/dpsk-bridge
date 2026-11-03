@@ -21,6 +21,14 @@ function fixture(t) {
 const release = (tag = 'v0.5.0', extra = {}) => new Response(JSON.stringify({ tag_name: tag, draft: false, prerelease: false, ...extra }), { status: 200 });
 const update = { available: true, current: '0.4.0', latest: '0.5.0', tag: 'v0.5.0' };
 const offline = async () => { throw new Error('offline'); };
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+async function until(check, message = 'condition', timeout = 5000) {
+  const deadline = Date.now() + timeout;
+  while (!check()) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${message}`);
+    await delay(10);
+  }
+}
 
 test('package metadata and official repository resolution use a single source', () => {
   assert.equal(packageJson.repository.url, 'git+https://github.com/XiaoNetwork-Astral/dpsk-bridge.git');
@@ -203,7 +211,8 @@ test('queued updates time out or cancel without disturbing the active reservatio
     await assert.rejects(applyUpdate(update, { ...f, queueTimeoutMs: 30 }), /queue wait timed out/);
     const abort = new AbortController();
     const waiting = applyUpdate(update, { ...f, signal: abort.signal });
-    setTimeout(() => abort.abort(), 20);
+    await until(() => reservations(f).length === 2, 'update queued');
+    abort.abort();
     await assert.rejects(waiting, /queue cancelled/);
     assert.equal(reservations(f).length, 1); assert.equal(f.commands.length, 0);
   } finally { await active.release(); }
@@ -215,11 +224,7 @@ test('rechecks installed version after acquiring the exclusive reservation', asy
   const updating = applyUpdate(update, f);
   const rejected = assert.rejects(updating, /no longer newer/);
   try {
-    const deadline = Date.now() + 3000;
-    while (reservations(f).length < 2) {
-      if (Date.now() > deadline) throw new Error('Updater did not queue');
-      await new Promise(resolve => setTimeout(resolve, 10));
-    }
+    await until(() => reservations(f).length >= 2, 'updater queued');
     fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: 'dpsk-bridge', version: '0.5.0' }));
   } finally { await active.release(); }
   await rejected; assert.equal(f.commands.length, 0); assert.deepEqual(reservations(f), []);

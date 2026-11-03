@@ -354,7 +354,7 @@ test('a narrower width wraps option descriptions and keeps the indent', () => {
 function cliRuntime(report) {
   return `
 import readline from 'node:readline';
-const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
+const write = (m, done) => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n', done);
 let sessionId, seq = 0;
 const event = (type, data) => write({ method: 'session.event', params: { sessionId, event: { type, seq: ++seq, time: Date.now(), data } } });
 readline.createInterface({ input: process.stdin }).on('line', line => {
@@ -366,7 +366,7 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
     event('turn/end', { turn: 1, reason: { kind: 'completed' } });
     write({ id: m.id, result: { messageId: 'm' } });
   } else if (m.method === 'session/wait') write({ id: m.id, result: {} });
-  else if (m.method === 'shutdown') { write({ id: m.id, result: {} }); setTimeout(() => process.exit(0), 10); }
+  else if (m.method === 'shutdown') { write({ id: m.id, result: {} }, () => process.exit(0)); }
 });`;
 }
 

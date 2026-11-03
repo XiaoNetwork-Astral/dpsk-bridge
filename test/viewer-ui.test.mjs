@@ -254,7 +254,10 @@ process.argv=['node',${JSON.stringify(cli)},'--no-update-check'];await import(${
 const key=s=>process.stdin.emit('data',Buffer.from(s));
 frames.initial=current;key('z');frames.folded=current;key('Z');frames.opened=current;
 key('n');frames.next1=current;key('n');frames.next2=current;key('n');frames.next3=current;
-key('?');frames.help=current;key('\\x1b[<0;10;5M');frames.helpClick=current;key('\\x1b');await new Promise(resolve=>setTimeout(resolve,120));frames.helpClosed=current;
+key('?');frames.help=current;key('\\x1b[<0;10;5M');frames.helpClick=current;key('\\x1b');
+const closeDeadline=Date.now()+2000;
+while(current.includes('Help  ? to close')){if(Date.now()>closeDeadline)throw new Error('help did not close');await new Promise(resolve=>setTimeout(resolve,10));}
+frames.helpClosed=current;
 stdout(JSON.stringify(frames));process.exit(0);`;
   const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', env: { ...process.env, DSH_SESSIONS_ROOT: root }, timeout: 15000 });
   assert.equal(output.status, 0, output.stderr);

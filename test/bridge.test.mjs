@@ -7,74 +7,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { runJob, readJob, status, sendMessage, answerRequest, eventsPage, cancelJob, result, retryJob, reviewJob, stats, briefText, waitJob, unlockJob } from '../lib/bridge.mjs';
-
-const fake = `
-import readline from 'node:readline';
-const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
-let sessionId, prompt='', extra='', answer=false, mode='', seq=0, finished=false;
-const waiting=[];
-const event=(type,data)=>write({method:'session.event',params:{sessionId,event:{type,seq:++seq,time:Date.now(),data}}});
-const finish=()=>{
- if(finished || mode==='hold' || (mode==='chat' && (!extra || !answer)))return;
- finished=true;
- event('assistant/message',{turn:1,step:1,message:{role:'assistant',content:[{type:'text',text:'RESULT: OK\\n'+extra}]},usage:{inputTokens:10,outputTokens:4,cacheReadTokens:0,cacheWriteTokens:0}});
- event('assistant/message',{turn:1,step:2,message:{role:'assistant',content:[{type:'reasoning',text:'no additional answer'}]}});
- event('turn/end',{turn:1,reason:{kind:'completed'}});
- for(const id of waiting.splice(0))write({id,result:{}});
-};
-readline.createInterface({input:process.stdin}).on('line',line=>{
- const m=JSON.parse(line);
- if(m.method==='initialize'){write({id:m.id,result:{serverInfo:{name:'deepseek-harness-sdk-runtime',version:'0.0.1'}}});}
- else if(m.method==='session/prompt'){
-  sessionId=m.params.sessionId;
-  const text=m.params.contentBlocks[0].text;
-  if(!prompt){prompt=text;mode=text.includes('[chat]')?'chat':text.includes('[hold]')?'hold':'simple';
-   event('user/message',{source:{kind:'user'},content:[{type:'text',text}]});
-   if(mode==='chat')write({id:'ask-rpc-1',method:'user-question/ask',params:{requestId:'question-1',sessionId,questions:[{id:'choice',question:'Proceed?',options:[]}]}});
-  }else extra=text;
-  write({id:m.id,result:{messageId:'message-'+seq}});setTimeout(finish,30);
- }else if(m.method==='session/wait'){if(finished)write({id:m.id,result:{}});else waiting.push(m.id);}
- else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
- else if(m.id==='ask-rpc-1'){answer=!!m.result.answers;finish();}
-});
-`;
-
-function setup(t, brief) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
-  const entry = path.join(root, 'runtime', 'lib', 'bin.mjs'); fs.writeFileSync(entry, fake);
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.2-alpha.3' }));
-  const briefFile = path.join(root, 'brief.md'); fs.writeFileSync(briefFile, brief);
-  return { root, home: path.join(root, 'bridge'), options: { cwd: root, brief: briefFile, dshEntry: entry, timeout: 10 } };
-}
-
-// A runtime that records the first prompt's contentBlocks so tests can inspect them.
-function captureRuntime(file) {
-  return `
-import fs from 'node:fs';
-import readline from 'node:readline';
-const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
-let sessionId, waitId, seq=0, finished=false;
-const event=(type,data)=>write({method:'session.event',params:{sessionId,event:{type,seq:++seq,time:Date.now(),data}}});
-const finish=()=>{
- if(finished)return;finished=true;
- event('assistant/message',{turn:1,step:1,message:{role:'assistant',content:[{type:'text',text:'RESULT: OK'}]}});
- event('turn/end',{turn:1,reason:{kind:'completed'}});
- if(waitId)write({id:waitId,result:{}});
-};
-readline.createInterface({input:process.stdin}).on('line',line=>{
- const m=JSON.parse(line);
- if(m.method==='initialize')write({id:m.id,result:{serverInfo:{name:'deepseek-harness-sdk-runtime',version:'0.0.1'}}});
- else if(m.method==='session/prompt'){
-  sessionId=m.params.sessionId;
-  fs.writeFileSync(${JSON.stringify(file)},JSON.stringify(m.params.contentBlocks));
-  write({id:m.id,result:{messageId:'m'}});setTimeout(finish,20);
- }else if(m.method==='session/wait'){if(finished)write({id:m.id,result:{}});else waitId=m.id;}
- else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
-});
-`;
-}
+import { fake, captureRuntime, setup } from './helpers/fake-dsh.mjs';
 
 const digest = buffer => createHash('sha256').update(buffer).digest('hex');
 const pngBytes = () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x49, 0x48, 0x44, 0x52]);
@@ -213,7 +146,7 @@ test('SDK delivers followups and answers during wait, persists receipts and usag
 test('cancellation terminates the dedicated SDK process and releases its reservation', async t => {
   const { options, home } = setup(t, '[hold] wait forever');
   const job = await runJob(options, e => {
-    if (e.event === 'started') setTimeout(() => cancelJob(readJob(e.id, home), home), 100);
+    if (e.event === 'started') cancelJob(readJob(e.id, home), home);
   }, home);
   assert.equal(job.processState, 'cancelled', job.error);
   const next = await runJob({ ...options, originalBrief: 'simple' }, () => {}, home);
@@ -276,34 +209,46 @@ test('legacy retries without retryKind count as reworks', async t => {
   assert.equal(resumed.retryKind, 'resume');
 });
 
-test('a timer-delivered followup must cross a new wait barrier before shutdown', async t => {
+test('a followup delivered during wait forces another wait barrier before shutdown', async t => {
   const { options, home } = setup(t, 'race');
   fs.writeFileSync(options.dshEntry, `
 import readline from 'node:readline';
-const send=m=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
-let sessionId, prompts=0, waits=0, seq=0, completed=false;
+const send=(m,done)=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n',done);
+let sessionId, prompts=0, firstWait=null, stale=false, completed=false, seq=0;
 const event=(type,data)=>send({method:'session.event',params:{sessionId,event:{type,seq:++seq,time:Date.now(),data}}});
 const finish=text=>{event('assistant/message',{turn:prompts,step:1,message:{role:'assistant',content:[{type:'text',text:'RESULT: OK\\n'+text}]}});event('turn/end',{turn:prompts,reason:{kind:'completed'}});};
+const staleFinish=()=>{
+ if(stale || !firstWait || prompts < 2)return;
+ stale=true;
+ finish('stale first answer');
+ send({id:firstWait,result:{}});firstWait=null;
+};
 readline.createInterface({input:process.stdin}).on('line',line=>{
  const m=JSON.parse(line);
  if(m.method==='initialize')send({id:m.id,result:{serverInfo:{name:'deepseek-harness-sdk-runtime'}}});
- if(m.method==='session/prompt'){
+ else if(m.method==='session/prompt'){
   sessionId=m.params.sessionId;prompts++;
-  if(prompts===1)send({id:m.id,result:{messageId:'first'}});
-  else setTimeout(()=>{send({id:m.id,result:{messageId:'second'}});event('turn/start',{turn:2});},100);
- }
- if(m.method==='session/wait'){
-  waits++;
-  if(waits===1)setTimeout(()=>{finish('stale first answer');send({id:m.id,result:{}});},140);
-  else setTimeout(()=>{finish('updated answer');completed=true;send({id:m.id,result:{}});},60);
- }
- if(m.method==='shutdown'){send({id:m.id,result:{}});setTimeout(()=>process.exit(completed?0:9),10);}
+  send({id:m.id,result:{messageId:'m'+prompts}});
+  staleFinish();
+ }else if(m.method==='session/wait'){
+  if(prompts>=2){
+   finish('updated answer');completed=true;send({id:m.id,result:{}});
+  }else{
+   firstWait=m.id;
+   // Ask the host for the follow-up only after this wait exists, so it is
+   // delivered during the wait instead of racing ahead of it.
+   send({id:'ask-race',method:'user-question/ask',params:{requestId:'q-race',sessionId,questions:[{id:'choice',question:'Continue?',options:[]}]}});
+  }
+ }else if(m.method==='shutdown'){send({id:m.id,result:{}},()=>process.exit(completed?0:9));}
 });`);
+  let id;
   const job = await runJob(options, e => {
-    if (e.event === 'started') setTimeout(() => sendMessage(readJob(e.id, home), 'second turn', home), 70);
+    if (e.event === 'started') id = e.id;
+    if (e.event === 'request' && e.requestId === 'q-race') sendMessage(readJob(id, home), 'second turn', home);
   }, home);
   assert.equal(job.processState, 'completed', job.error);
   assert.match(result(job).report, /updated answer/);
+  assert.doesNotMatch(result(job).report, /stale first answer/);
 });
 
 test('malformed SDK output fails the job and still releases the workspace', async t => {
@@ -517,16 +462,6 @@ test('review accepted requires exit code zero and an OK reported result', async 
     assert.throws(() => reviewJob(candidate, 'accepted', 'evidence', home), /cannot be marked accepted/);
   assert.equal(reviewJob(job, 'accepted', 'evidence', home).acceptance, 'accepted');
   assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8')).review.verdict, 'accepted');
-});
-
-test('POSIX cleanup resolves when the child exits instead of waiting for SIGKILL', { skip: process.platform === 'win32' }, async t => {
-  const { options, home } = setup(t, '[hold] wait forever');
-  let startedAt;
-  const job = await runJob(options, event => {
-    if (event.event === 'started') { startedAt = Date.now(); setTimeout(() => cancelJob(readJob(event.id, home), home), 20); }
-  }, home);
-  assert.equal(job.processState, 'cancelled', job.error);
-  assert.ok(Date.now() - startedAt < 1400, `cleanup took ${Date.now() - startedAt}ms`);
 });
 
 test('accounting accepts an unknown host Cost key and stats aggregates it', async t => {

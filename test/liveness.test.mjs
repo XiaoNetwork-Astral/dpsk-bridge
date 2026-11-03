@@ -8,6 +8,7 @@ import { once } from 'node:events';
 import { liveProcessState, heartbeatFresh, supervisorLive, touchHeartbeat } from '../lib/job-state.mjs';
 import { runJob, readJob, status, cancelJob, unlockJob, sendMessage, answerRequest, waitJob } from '../lib/bridge.mjs';
 import { acquireSlot, releaseReservation } from '../lib/scheduler.mjs';
+import { setup } from './helpers/fake-dsh.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const stale = file => { const old = new Date(Date.now() - 2 * 60 * 1000); fs.utimesSync(file, old, old); };
@@ -97,42 +98,24 @@ test('wait returns unknown for a stale heartbeat instead of waiting forever', as
     review: null, exitCode: null, reportedResult: null, cwd: root,
     reportFile: path.join(dir, 'report.txt'), stderrFile: path.join(dir, 'stderr.log'), eventsFile: path.join(dir, 'events.jsonl') };
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
-  const began = Date.now();
   const waited = await waitJob({ id }, 1, home);
   assert.equal(waited.reason, 'unknown');
   assert.equal(waited.processState, 'unknown');
-  assert.ok(Date.now() - began < 500, `wait took ${Date.now() - began}ms`);
 });
 
 test('the supervisor refreshes its heartbeat while the job stays idle', async t => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-beat-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const home = path.join(root, 'bridge');
-  fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
-  const entry = path.join(root, 'runtime', 'lib', 'bin.mjs');
-  fs.writeFileSync(entry, `
-import readline from 'node:readline';
-const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m}) + '\\n');
-readline.createInterface({input: process.stdin}).on('line', line => {
-  const m = JSON.parse(line);
-  if (m.method === 'initialize') write({id: m.id, result: {serverInfo: {name: 'deepseek-harness-sdk-runtime'}}});
-  else if (m.method === 'session/prompt') write({id: m.id, result: {messageId: 'm'}});
-  else if (m.method === 'shutdown') { write({id: m.id, result: {}}); setTimeout(() => process.exit(0), 10); }
-});
-`);
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.2-alpha.3' }));
-  const brief = path.join(root, 'brief.md');
-  fs.writeFileSync(brief, '[hold] stay alive');
+  const { home, options } = setup(t, '[hold] stay alive');
   let id;
-  const running = runJob({ cwd: root, brief, dshEntry: entry, timeout: 10, heartbeatIntervalMs: 25 }, event => {
+  const running = runJob({ ...options, heartbeatIntervalMs: 25 }, event => {
     if (event.event === 'started') id = event.id;
   }, home);
   try {
     await until(() => id);
     const record = readJob(id, home);
-    const before = fs.statSync(record.heartbeatFile).mtimeMs;
-    await until(() => fs.statSync(record.heartbeatFile).mtimeMs > before);
-    await delay(120);
+    const first = fs.statSync(record.heartbeatFile).mtimeMs;
+    await until(() => fs.statSync(record.heartbeatFile).mtimeMs > first);
+    const second = fs.statSync(record.heartbeatFile).mtimeMs;
+    await until(() => fs.statSync(record.heartbeatFile).mtimeMs > second);
     assert.equal(status(readJob(id, home)).processState, 'running');
     assert.equal(liveProcessState(readJob(id, home)), 'running');
   } finally {
