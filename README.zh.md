@@ -22,7 +22,7 @@ cd dpsk-bridge
 
 脚本会安装依赖和 dsh，同步 skills，并提供 `dsb`/`dsv` 命令。装好后不要移动这个目录，并重新打开宿主会话。
 
-没有 PowerShell 时，手动运行 `npm ci --ignore-scripts && npm link`，再把 `skill/` 下的两个目录复制到宿主加载 skill 的位置。
+没有 PowerShell 时，先运行 `npm install -g @deepseek-ai/dsh@0.2.1-rc.3` 安装 dsh，再运行 `npm ci --ignore-scripts && npm link`，并把 `skill/` 下的两个目录复制到宿主加载 skill 的位置。
 
 ## 使用
 

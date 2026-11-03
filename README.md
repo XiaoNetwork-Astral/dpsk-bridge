@@ -22,7 +22,7 @@ cd dpsk-bridge
 
 The script installs dependencies and dsh, syncs the skills, and links the `dsb`/`dsv` commands. Do not move the directory afterwards, and reopen your host session.
 
-Without PowerShell, run `npm ci --ignore-scripts && npm link`, then copy the two folders under `skill/` to wherever your host loads skills from.
+Without PowerShell, install dsh with `npm install -g @deepseek-ai/dsh@0.2.1-rc.3`, then run `npm ci --ignore-scripts && npm link`, and copy the two folders under `skill/` to wherever your host loads skills from.
 
 ## Usage
 

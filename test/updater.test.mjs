@@ -138,13 +138,23 @@ function reservations(f) {
 test('updates a real clean checkout by fast-forward and invokes npm through Node, releasing the exclusive reservation', async t => {
   const f = repository(t), progress = [];
   const result = await applyUpdate(update, { ...f, onProgress: text => progress.push(text) });
-  assert.equal(result.version, '0.5.0'); assert.equal(result.restartRequired, true);
+  assert.equal(result.version, '0.5.0'); assert.equal(result.restartRequired, true); assert.equal(result.warnings, undefined);
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), git(f.root, ['rev-parse', 'v0.5.0']));
   const npm = f.commands.filter(([command]) => command === process.execPath);
   assert.equal(npm.length, 3); assert.match(npm[0][1][0], /npm-cli\.js$/);
   assert.deepEqual(npm[0][1].slice(1), ['ci', '--ignore-scripts', '--omit=dev']);
   assert.deepEqual(npm[1][1].slice(1), ['run', 'check']); assert.ok(progress.length >= 8);
   assert.deepEqual(npm[2][1].slice(1), ['run', 'sync-skills']);
+  assert.deepEqual(reservations(f), []);
+});
+
+test('a non-Windows skill-sync warning is returned without failing the update', async t => {
+  const f = repository(t), base = f.run;
+  const warning = 'WARNING: skills not synchronized (automatic skill synchronization requires Windows). Copy skill/ into your host skill directory.';
+  const run = async (command, args, options) => command === process.execPath && args.includes('sync-skills')
+    ? { code: 0, stdout: '', stderr: warning } : base(command, args, options);
+  const result = await applyUpdate(update, { ...f, run });
+  assert.equal(result.updated, true); assert.deepEqual(result.warnings, [warning]);
   assert.deepEqual(reservations(f), []);
 });
 

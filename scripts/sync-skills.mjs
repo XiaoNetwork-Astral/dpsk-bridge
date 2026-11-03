@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 
 const state = path.join(os.homedir(), '.dpsk-bridge');
 if (process.platform !== 'win32') {
-  console.log('Automatic skill synchronization currently requires Windows; copy skill/ into your host skill directory.');
+  console.warn('WARNING: skills not synchronized (automatic skill synchronization requires Windows). Copy skill/ into your host skill directory.');
 } else if (fs.existsSync(state)) {
   for (const file of fs.readdirSync(state).filter(name => /^installed-skills(?:-[A-Za-z0-9-]+)?\.host\.json$/.test(name))) {
     const host = JSON.parse(fs.readFileSync(path.join(state, file), 'utf8'));

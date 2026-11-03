@@ -215,6 +215,14 @@ foreach ($client in $Selected) {
             $rel = $file.FullName.Substring($src.Length).TrimStart('\')
             Sync-File $file.FullName (Join-Path $dst $rel) "$client/$name/$rel"
         }
+        # Files deleted from the source skill are pruned from this managed copy after a backup.
+        foreach ($file in @(Get-ChildItem -LiteralPath $dst -File -Recurse -Force)) {
+            $rel = $file.FullName.Substring($dst.Length).TrimStart('\')
+            if (Test-Path -LiteralPath (Join-Path $src $rel)) { continue }
+            $bak = Backup $file.FullName "$client/$name/$rel"
+            Remove-Item -LiteralPath $file.FullName -Force
+            Did "$client/$name/$rel removed (backup: $bak)"
+        }
     }
     foreach ($old in @(Get-InstalledSkills $client)) { if ($repoSkills -notcontains $old) { Remove-Skill $client $old } }
     New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
