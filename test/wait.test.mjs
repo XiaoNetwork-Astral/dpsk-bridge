@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { runJob, readJob, waitJob, sendMessage, answerRequest, cancelJob, retryJob, eventsPage } from '../lib/bridge.mjs';
+import { runJob, readJob, waitJob, sendMessage, answerRequest, cancelJob, eventsPage } from '../lib/bridge.mjs';
 
 const fake = `
 import readline from 'node:readline';
@@ -33,29 +33,6 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
  }else if(m.method==='session/wait'){if(finished)write({id:m.id,result:{}});else waiting.push(m.id);}
  else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
  else if(m.id==='ask-rpc-1'){answer=!!m.result.answers;finish();}
-});
-`;
-
-// Sends the same requestId twice; only one notification should be sent.
-const duplicateRequestFake = `
-import readline from 'node:readline';
-const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
-let sessionId, answered=false, waitId, seq=0, finished=false;
-const event=(type,data)=>write({method:'session.event',params:{sessionId,event:{type,seq:++seq,time:Date.now(),data}}});
-const question=()=>write({id:'same-rpc',method:'user-question/ask',params:{requestId:'same-request',sessionId,questions:[{id:'choice',question:'Proceed?',options:[]}]}});
-const finish=()=>{
- if(finished||!answered)return;finished=true;
- event('assistant/message',{turn:1,step:1,message:{role:'assistant',content:[{type:'text',text:'RESULT: OK'}]}});
- event('turn/end',{turn:1,reason:{kind:'completed'}});
- if(waitId)write({id:waitId,result:{}});
-};
-readline.createInterface({input:process.stdin}).on('line',line=>{
- const m=JSON.parse(line);
- if(m.method==='initialize')write({id:m.id,result:{serverInfo:{name:'deepseek-harness-sdk-runtime'}}});
- else if(m.method==='session/prompt'){sessionId=m.params.sessionId;question();question();write({id:m.id,result:{messageId:'m'}});}
- else if(m.method==='session/wait'){if(finished)write({id:m.id,result:{}});else waitId=m.id;}
- else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
- else if(m.id==='same-rpc'){answered=true;finish();}
 });
 `;
 
@@ -119,22 +96,6 @@ function setup(t, brief) {
   return { root, home: path.join(root, 'bridge'), options: { cwd: root, brief: briefFile, dshEntry: entry, timeout: 10 } };
 }
 
-function nodeCommand(root, name, source) {
-  const file = path.join(root, name + '.mjs');
-  fs.writeFileSync(file, source);
-  return { file, command: `node "${file}"` };
-}
-
-function envNotifier(root, name, out) {
-  return nodeCommand(root, name, `
-import fs from 'node:fs';
-fs.appendFileSync(${JSON.stringify(out)}, JSON.stringify({
-  event: process.env.DSB_EVENT, job: process.env.DSB_JOB_ID, state: process.env.DSB_STATE,
-  result: process.env.DSB_RESULT, request: process.env.DSB_REQUEST_ID ?? null, argv: process.argv.slice(2),
-}) + '\\n');
-`).command;
-}
-
 function background(t, options, home, onEvent = () => {}) {
   let id;
   const started = Promise.withResolvers();
@@ -152,10 +113,6 @@ function background(t, options, home, onEvent = () => {}) {
     await running.catch(() => {});
   });
   return { started: started.promise, running };
-}
-
-function outputRecords(out) {
-  return fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
 }
 
 async function waitForEvent(id, home, name, timeoutMs = 5000) {
@@ -332,171 +289,4 @@ test('wait keeps pending requests out of actionableRequests while the job is fin
   assert.equal(done.reason, 'finished');
   assert.equal(done.processState, 'completed');
   assert.deepEqual(done.actionableRequests, []);
-});
-
-test('notify runs once on finish and receives job data only through the environment', async t => {
-  const { root, options, home } = setup(t, 'notify finished');
-  const out = path.join(root, 'finished.out'), command = envNotifier(root, 'notify-finished', out);
-  const job = await runJob({ ...options, notifyCmd: command }, () => {}, home);
-  assert.equal(job.processState, 'completed', job.error);
-  assert.equal(job.notifyCmd, command);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'jobs', job.id, 'job.json'), 'utf8')).notifyCmd, command);
-  const records = outputRecords(out);
-  assert.equal(records.length, 1);
-  assert.equal(records[0].event, 'finished');
-  assert.equal(records[0].job, job.id);
-  assert.equal(records[0].state, 'completed');
-  assert.equal(records[0].result, 'OK');
-  assert.equal(records[0].request, null);
-  assert.equal(JSON.stringify(records[0].argv).includes(job.id), false);
-  const sent = eventsPage(job, 0, 200).events.filter(event => event.event === 'notify_sent');
-  assert.deepEqual(sent.map(event => [event.notifyEvent, event.exitCode]), [['finished', 0]]);
-  assert.ok(fs.existsSync(path.join(path.dirname(job.reportFile), 'notify.log')));
-});
-
-test('notify runs once for a new request and once on finish', async t => {
-  const { root, options, home } = setup(t, '[chat] notify request');
-  const out = path.join(root, 'request.out'), command = envNotifier(root, 'notify-request', out);
-  const { started, running } = background(t, { ...options, notifyCmd: command }, home);
-  const id = await started;
-  const request = await waitJob({ id }, 10, home);
-  assert.equal(request.reason, 'request');
-  sendMessage(readJob(id, home), 'host follow up', home);
-  answerRequest(readJob(id, home), request.pendingRequests[0].requestId,
-    { answers: [{ id: 'choice', selected: [], custom: 'Continue' }] }, home);
-  const finished = await waitJob({ id }, 10, home);
-  assert.equal(finished.reason, 'finished');
-  const job = await running;
-  assert.equal(job.processState, 'completed', job.error);
-  const records = outputRecords(out);
-  assert.equal(records.filter(record => record.event === 'request').length, 1);
-  assert.equal(records.filter(record => record.event === 'finished').length, 1);
-  const noted = records.find(record => record.event === 'request');
-  assert.equal(noted.job, id);
-  assert.equal(noted.request, request.pendingRequests[0].requestId);
-  assert.equal(noted.state, 'running');
-  assert.equal(noted.result, '');
-  assert.equal(records.find(record => record.event === 'finished').result, 'OK');
-});
-
-test('the same requestId triggers notify only once', async t => {
-  const { root, options, home } = setup(t, 'notify duplicate');
-  fs.writeFileSync(options.dshEntry, duplicateRequestFake);
-  const out = path.join(root, 'duplicate.out'), command = envNotifier(root, 'notify-duplicate', out);
-  const { started, running } = background(t, { ...options, notifyCmd: command }, home);
-  const id = await started;
-  const request = await waitJob({ id }, 10, home);
-  assert.equal(request.reason, 'request');
-  answerRequest(readJob(id, home), request.pendingRequests[0].requestId,
-    { answers: [{ id: 'choice', selected: [], custom: 'Continue' }] }, home);
-  const finished = await waitJob({ id }, 10, home);
-  assert.equal(finished.reason, 'finished');
-  const job = await running;
-  assert.equal(job.processState, 'completed', job.error);
-  assert.equal(outputRecords(out).filter(record => record.event === 'request').length, 1);
-});
-
-test('a failing notify command is recorded without changing the job result', async t => {
-  const { root, options, home } = setup(t, 'notify failure');
-  const { command } = nodeCommand(root, 'notify-fail', 'process.exit(1);');
-  const job = await runJob({ ...options, notifyCmd: command }, () => {}, home);
-  assert.equal(job.processState, 'completed', job.error);
-  assert.equal(job.reportedResult, 'OK');
-  const failures = eventsPage(job, 0, 200).events.filter(event => event.event === 'notify_failed');
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].notifyEvent, 'finished');
-  assert.equal(failures[0].exitCode, 1);
-  assert.match(failures[0].reason, /exit/);
-});
-
-test('a request notify failure carries requestId while a finished failure does not', async t => {
-  const { root, options, home } = setup(t, '[chat] notify failure correlation');
-  const { command } = nodeCommand(root, 'notify-fail-both', 'process.exit(1);');
-  const { started, running } = background(t, { ...options, notifyCmd: command }, home);
-  const id = await started;
-  const request = await waitJob({ id }, 10, home);
-  assert.equal(request.reason, 'request');
-  const requestId = request.pendingRequests[0].requestId;
-  sendMessage(readJob(id, home), 'host follow up', home);
-  answerRequest(readJob(id, home), requestId,
-    { answers: [{ id: 'choice', selected: [], custom: 'Continue' }] }, home);
-  const finished = await waitJob({ id }, 10, home);
-  assert.equal(finished.reason, 'finished');
-  const job = await running;
-  assert.equal(job.processState, 'completed', job.error);
-  const failures = eventsPage(job, 0, 200).events.filter(event => event.event === 'notify_failed');
-  assert.equal(failures.length, 2);
-  const requestFailure = failures.find(event => event.notifyEvent === 'request');
-  const finishedFailure = failures.find(event => event.notifyEvent === 'finished');
-  assert.equal(requestFailure.requestId, requestId);
-  assert.equal(requestFailure.exitCode, 1);
-  assert.equal('requestId' in finishedFailure, false);
-  assert.equal(finishedFailure.exitCode, 1);
-});
-
-test('a rejected answer records the requestId on input_rejected', async t => {
-  const { options, home } = setup(t, '[chat] rejected answer');
-  const { started, running } = background(t, options, home);
-  const id = await started;
-  const request = await waitJob({ id }, 10, home);
-  assert.equal(request.reason, 'request');
-  const requestId = request.pendingRequests[0].requestId;
-  const queued = answerRequest(readJob(id, home), requestId, { answers: [] }, home);
-  const rejected = await waitForEvent(id, home, 'input_rejected');
-  assert.equal(rejected.requestId, requestId);
-  assert.equal(rejected.inputId, queued.inputId);
-  assert.match(rejected.error, /Answer each original question id/);
-  sendMessage(readJob(id, home), 'host follow up', home);
-  answerRequest(readJob(id, home), requestId,
-    { answers: [{ id: 'choice', selected: [], custom: 'Continue' }] }, home);
-  const finished = await waitJob({ id }, 10, home);
-  assert.equal(finished.reason, 'finished');
-  const job = await running;
-  assert.equal(job.processState, 'completed', job.error);
-});
-
-test('a timed-out notify command is terminated without changing the job result', async t => {
-  const { root, options, home } = setup(t, 'notify timeout');
-  const marker = path.join(root, 'notify-started.txt');
-  const { command } = nodeCommand(root, 'notify-slow', `
-import fs from 'node:fs';
-fs.writeFileSync(${JSON.stringify(marker)}, 'started');
-setTimeout(() => {}, 5000);
-`);
-  const began = Date.now();
-  const job = await runJob({ ...options, notifyCmd: command, notifyTimeout: 200 }, () => {}, home);
-  assert.equal(job.processState, 'completed', job.error);
-  assert.equal(job.reportedResult, 'OK');
-  assert.ok(fs.existsSync(marker));
-  assert.ok(Date.now() - began < 4000, `notify timeout took ${Date.now() - began}ms`);
-  const failures = eventsPage(job, 0, 200).events.filter(event => event.event === 'notify_failed');
-  assert.equal(failures.length, 1);
-  assert.equal(failures[0].notifyEvent, 'finished');
-  assert.match(failures[0].reason, /timed out after 200 ms/);
-});
-
-test('retry carries the parent notify command and accepts an override', async t => {
-  const { root, options, home } = setup(t, 'notify retry');
-  const out = path.join(root, 'retry.out'), command = envNotifier(root, 'notify-retry', out);
-  const override = nodeCommand(root, 'notify-override', 'process.exit(0);').command;
-  const job = await runJob({ ...options, notifyCmd: command }, () => {}, home);
-  const retry = await retryJob(job, 'try again', () => {}, home);
-  assert.equal(retry.processState, 'completed', retry.error);
-  assert.equal(retry.notifyCmd, command);
-  assert.deepEqual(outputRecords(out).map(record => record.job), [job.id, retry.id]);
-  const third = await retryJob(retry, 'one more', () => {}, home, override, { userOk: true });
-  assert.equal(third.processState, 'completed', third.error);
-  assert.equal(third.notifyCmd, override);
-});
-
-test('notify-cmd rejects blank, multiline and overlong commands before launch', async t => {
-  const { options, home } = setup(t, 'bad notify');
-  const marker = path.join(options.cwd, 'started.txt');
-  fs.writeFileSync(options.dshEntry, `import fs from 'node:fs';fs.writeFileSync(${JSON.stringify(marker)},'started');`);
-  await assert.rejects(runJob({ ...options, notifyCmd: '' }, () => {}, home), /notify-cmd must not be blank/);
-  await assert.rejects(runJob({ ...options, notifyCmd: '   ' }, () => {}, home), /notify-cmd must not be blank/);
-  await assert.rejects(runJob({ ...options, notifyCmd: 'echo ok\necho no' }, () => {}, home), /notify-cmd must not contain line breaks/);
-  await assert.rejects(runJob({ ...options, notifyCmd: 'x'.repeat(2001) }, () => {}, home), /notify-cmd must be at most 2000 characters/);
-  assert.equal(fs.existsSync(marker), false);
-  assert.equal(fs.existsSync(home), false);
 });

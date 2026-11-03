@@ -254,10 +254,10 @@ test('a task allows one rework, refuses the second, and resumes do not count', a
   assert.equal(first.retryKind, 'rework');
   await assert.rejects(retryJob(first, 'second rework', () => {}, home),
     /already used its one rework.*--user-ok/);
-  const resumed = await retryJob(first, 'resume interrupted work', () => {}, home, undefined, { resume: true });
+  const resumed = await retryJob(first, 'resume interrupted work', () => {}, home, { resume: true });
   assert.equal(resumed.retryKind, 'resume');
   assert.equal(resumed.processState, 'completed', resumed.error);
-  const second = await retryJob(first, 'second rework', () => {}, home, undefined, { userOk: true });
+  const second = await retryJob(first, 'second rework', () => {}, home, { userOk: true });
   assert.equal(second.retryKind, 'rework');
   assert.equal(second.processState, 'completed', second.error);
 });
@@ -272,7 +272,7 @@ test('legacy retries without retryKind count as reworks', async t => {
   fs.writeFileSync(file, JSON.stringify(record));
   await assert.rejects(retryJob(readJob(legacy.id, home), 'another rework', () => {}, home),
     /already used its one rework/);
-  const resumed = await retryJob(readJob(legacy.id, home), 'resume only', () => {}, home, undefined, { resume: true });
+  const resumed = await retryJob(readJob(legacy.id, home), 'resume only', () => {}, home, { resume: true });
   assert.equal(resumed.retryKind, 'resume');
 });
 
@@ -319,7 +319,7 @@ test('malformed SDK output fails the job and still releases the workspace', asyn
 
 test('cleanup_failed jobs point at unlock and a new task instead of retry or review', async () => {
   const job = { id: '00000000-0000-4000-8000-000000000000', processState: 'cleanup_failed' };
-  const expected = /run dsb unlock 00000000-0000-4000-8000-000000000000 --confirmed-stopped, then start a new task with dsb run\. This job cannot be retried or reviewed\./;
+  const expected = /run dsb unlock 00000000-0000-4000-8000-000000000000 --confirm-stopped, then start a new task with dsb run\. This job cannot be retried or reviewed\./;
   await assert.rejects(retryJob(job, 'again', () => {}), expected);
   assert.throws(() => reviewJob(job, 'rework', 'note'), expected);
 });
@@ -340,7 +340,7 @@ test('unlock releases the reservation but keeps cleanup_failed non-retryable', a
     workspace: fs.realpathSync(root), scopes: [fs.realpathSync(root)], readOnly: false, exclusive: false, resources: [],
     maxConcurrent: 8, state: 'active', sequence: 1, queuedAt: Date.now(), startedAt: Date.now(),
   }] }));
-  await assert.rejects(unlockJob(job, false, home), /confirmed-stopped/);
+  await assert.rejects(unlockJob(job, false, home), /confirm-stopped/);
   await assert.rejects(unlockJob({ ...job, supervisorPid: process.pid }, true, home), /still present/);
   assert.deepEqual(await unlockJob(job, true, home), { id, unlocked: true,
     note: 'Inspect partial changes before creating a new run; unknown runs are not automatically retried.' });
@@ -453,10 +453,10 @@ test('wait returns a pending request before an unreported context reminder', asy
   job.processState = 'completed'; fs.writeFileSync(jobFile, JSON.stringify(job));
   assert.equal((await waitJob({ id }, 1, home)).reason, 'finished');
 });
-test('run timeout rejects zero with the real allowed range', async t => {
+test('run time limit rejects zero with the real allowed range', async t => {
   const { options, home } = setup(t, 'timeout range');
   for (const timeout of [0, 86401]) await assert.rejects(runJob({ ...options, timeout }, () => {}, home),
-    /timeout must be greater than 0 and at most 86400 seconds/);
+    /time-limit must be greater than 0 and at most 86400 seconds/);
 });
 
 test('an inbox file whose rejection event cannot be written is reported and kept', async t => {

@@ -13,21 +13,21 @@ README 只放最常用的内容，这里是完整说明。每个命令的参数�
 ## 双向任务
 
 ```text
-dsb run --cwd "项目路径" --brief "brief.md" --timeout 2700
+dsb run --cwd "项目路径" --brief "brief.md" --time-limit 2700
 dsb run --cwd "项目路径" --brief "brief.md" --patch "MCP配置.yml"
 dsb run --cwd "项目路径" --brief "brief.md" --provider deepseek-official --model deepseek-flash
 dsb status <作业ID>
 dsb wait <作业ID> --timeout 600
-dsb events <作业ID> --after 0 --limit 20
-dsb send <作业ID> --message-file "追加要求.md"
+dsb events <作业ID> --cursor 0 --limit 20
+dsb send <作业ID> --message "追加要求.md"
 dsb answer <作业ID> --request <requestId> --answer "回复.json"
 dsb result <作业ID>
 dsb cancel <作业ID>
 ```
 
-`run` 会一直挂着，直到作业结束。宿主要保留这个进程的句柄，然后用 `dsb wait` 等待，每次返回后读取新的问题和进展。如果宿主的命令工具在命令运行期间拿不到输出，就把 `--timeout` 设成能接受的上限，等结束后用 `dsb result` 读结果。这类宿主只适合派中途不需要做决定的任务。
+`run` 会一直挂着，直到作业结束。宿主要保留这个进程的句柄，然后用 `dsb wait` 等待，每次返回后读取新的问题和进展。如果宿主的命令工具在命令运行期间拿不到输出，就把 `--time-limit` 设成能接受的上限，等结束后用 `dsb result` 读结果。这类宿主只适合派中途不需要做决定的任务。
 
-`events` 返回完整事件和一个字节游标（cursor，表示读到了日志的第几个字节）。下次把这个游标传给 `--after` 继续读；`more` 为真表示还有没读完的事件。`status.pendingRequests` 列出等待回复的问题和审批。回复普通问题时，按原问题的 ID 逐条填写：
+`events` 返回完整事件和一个字节游标（cursor，表示读到了日志的第几个字节）。下次把这个游标传给 `--cursor` 继续读；`more` 为真表示还有没读完的事件。`status.pendingRequests` 列出等待回复的问题和审批。回复普通问题时，按原问题的 ID 逐条填写：
 
 ```json
 {"answers":[{"id":"original-question-id","selected":[],"custom":"宿主补充的信息"}]}
@@ -55,12 +55,6 @@ dsb cancel <作业ID>
 `--timeout` 默认 600 秒，范围 1–3600，而且不能超过宿主单次命令允许的时长。返回结果里的 `actionableRequests` 是还没回复的请求；`pendingRequests` 列出全部待处理请求。已经回复过的请求（回答在排队或已送达）不会再让 `wait` 返回 `request`，除非之后出现 `input_rejected`。有请求或 `escalate` 时先返回它们，`context` 在之后一次 `wait` 返回；作业已经结束时直接返回 `finished`，不再提醒上下文；返回过 `context` 后会在作业目录写一个标记文件，不再重复。`wait` 返回只说明发生了什么，不代表成功，仍然要读结果并验收。
 
 上下文提醒的阈值默认 200000 token，可以用 `dsb run --context-limit <TOKENS>` 或环境变量 `DPSK_CONTEXT_LIMIT` 调整；`retry` 沿用原作业的值。每条带用量的助手消息都会刷新 `status.context`（`inputTokens + cacheReadTokens + cacheWriteTokens`）；第一次达到阈值时记录 `status.contextReminder` 和 `context_reminder` 事件，作业继续运行。`dsb status` 同时显示 `context` 和 `contextLimit`。
-
-### 实验功能：--notify-cmd
-
-`run` 和 `retry` 支持实验性的 `--notify-cmd <命令>`。作业结束，或出现新的待回复请求时（每个 requestId 只通知一次），dsb 会在本机执行这条命令一次，用来唤醒宿主。命令从环境变量读取情况：`DSB_JOB_ID`、`DSB_EVENT`（`finished` 或 `request`）、`DSB_STATE`、`DSB_RESULT`、`DSB_REQUEST_ID`。这些值不会拼进命令行。
-
-命令最多运行 30 秒，输出写入作业目录下的 `notify.log`。成功记一条 `notify_sent` 事件，失败或超时记一条 `notify_failed` 事件，两者都不影响作业结果；超时会结束命令和它的子进程。命令不能为空、不能含换行、最长 2000 字符。`retry` 沿用原作业的命令，也可以重新指定。这个功能还没有在任何真实宿主上验证过。
 
 ### 模型与图片
 
@@ -91,11 +85,11 @@ dsb stats
 
 ## 并发
 
-默认最多同时跑 8 个作业，共享同一个 `DSH_HOME` 的启动器一起排队。`DPSK_CONCURRENCY` 或 `--max-concurrent` 可以设成 1–256，多个启动器的上限不同时取最小值。`dsb retry` 沿用原作业记录的上限，不读当前的 `DPSK_CONCURRENCY`。想统一提高并发，就给所有启动器设同一个环境变量。实际速度还受服务配额、机器资源和范围冲突限制，256 只是上限，不是实测吞吐。
+默认最多同时跑 8 个作业，共享同一个 `DSH_HOME` 的启动器一起排队。`DPSK_CONCURRENCY` 或 `--concurrency` 可以设成 1–256，多个启动器的上限不同时取最小值。`dsb retry` 沿用原作业记录的上限，不读当前的 `DPSK_CONCURRENCY`。想统一提高并发，就给所有启动器设同一个环境变量。实际速度还受服务配额、机器资源和范围冲突限制，256 只是上限，不是实测吞吐。
 
 ```text
-dsb run --cwd "项目" --brief "前端.md" --scope src/frontend --max-concurrent 32
-dsb run --cwd "项目" --brief "后端.md" --scope src/backend --max-concurrent 32
+dsb run --cwd "项目" --brief "前端.md" --scope src/frontend --concurrency 32
+dsb run --cwd "项目" --brief "后端.md" --scope src/backend --concurrency 32
 dsb run --cwd "项目" --brief "调查.md" --read-only
 dsb run --cwd "另一个项目" --brief "场景编辑.md" --resource unity-editor-main
 ```
@@ -107,7 +101,7 @@ dsb run --cwd "另一个项目" --brief "场景编辑.md" --resource unity-edito
 
 范围、只读和资源都是协作约定，不是文件系统沙箱，宿主原有的权限和 Harness 沙箱照常生效。取消和总超时都把排队时间算在内。旧版启动器不参与新的调度协议，升级前要先结束旧作业。
 
-如果进程崩溃，或者无法确认清理成功，预约会一直保留。确认原任务和所有相关进程都已停止、检查过已完成的部分改动之后，才能运行 `dsb unlock <ID> --confirmed-stopped`。不能因为日志一段时间没更新，就认定进程已经停了。
+如果进程崩溃，或者无法确认清理成功，预约会一直保留。确认原任务和所有相关进程都已停止、检查过已完成的部分改动之后，才能运行 `dsb unlock <ID> --confirm-stopped`。不能因为日志一段时间没更新，就认定进程已经停了。
 
 ## dsv 会话查看器
 
@@ -160,7 +154,7 @@ dsv update --auto off       关闭自动更新（默认）
 
 开启自动更新后，发现正式新版本时会先等桥接作业结束，再独占调度系统进行更新。最多排队 60 秒，忙的话保留提示、下次再试。更新只在以下条件下进行：origin 是官方仓库（即 `package.json` 里 `repository.url` 指向的 GitHub 仓库）、工作区干净、历史可以快进。有本地修改或分叉时暂停更新，不会强制覆盖。更新会依次安装锁定的依赖、运行检查、同步已登记宿主的 skills，完成后需要重新打开 dsv 和宿主会话。
 
-只有用 Git 克隆并 link 安装的目录支持自动更新。失败记录在 `~/.dpsk-bridge/update-state.json`；如果代码已经快进但安装失败，按记录修复，不会自动回滚。清理失败、独占预约没释放时，先关掉原来的 dsv，确认记录里的所有进程都已退出，再运行 `dsv update --recover --confirmed-stopped`。版本比较用 npm 的 [semver](https://github.com/npm/node-semver)。常见的 [update-notifier](https://github.com/sindresorhus/update-notifier) 面向 npm registry，所以本项目直接跟随 GitHub Release。
+只有用 Git 克隆并 link 安装的目录支持自动更新。失败记录在 `~/.dpsk-bridge/update-state.json`；如果代码已经快进但安装失败，按记录修复，不会自动回滚。清理失败、独占预约没释放时，先关掉原来的 dsv，确认记录里的所有进程都已退出，再运行 `dsv update --recover --confirm-stopped`。版本比较用 npm 的 [semver](https://github.com/npm/node-semver)。常见的 [update-notifier](https://github.com/sindresorhus/update-notifier) 面向 npm registry，所以本项目直接跟随 GitHub Release。
 
 ## 发布与验证
 
