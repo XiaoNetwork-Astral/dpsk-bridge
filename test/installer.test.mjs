@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { acquireSlot } from '../lib/scheduler.mjs';
 
+// Fixtures
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const installer = path.join(repoRoot, 'scripts', 'installer-core.mjs');
 const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
@@ -28,6 +29,7 @@ function profile(t) {
 function environment(home, extra = {}) {
   const prefix = path.join(home, 'npm-prefix');
   fs.mkdirSync(prefix, { recursive: true });
+
   return {
     ...process.env,
     HOME: home,
@@ -91,6 +93,7 @@ function git(cwd, args) {
     ],
     { cwd, encoding: 'utf8', windowsHide: true },
   );
+
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
@@ -103,6 +106,7 @@ function upgradeCheckout(t) {
   const repository = path.join(base, 'repo');
   fs.mkdirSync(path.join(repository, 'scripts'), { recursive: true });
   fs.mkdirSync(path.join(repository, 'lib'), { recursive: true });
+
   fs.copyFileSync(installer, path.join(repository, 'scripts', 'installer-core.mjs'));
   fs.copyFileSync(
     path.join(repoRoot, 'scripts', 'host-presets.json'),
@@ -117,6 +121,7 @@ function upgradeCheckout(t) {
     path.join(repository, 'lib', 'job-state.mjs'),
   );
   fs.cpSync(path.join(repoRoot, 'skill'), path.join(repository, 'skill'), { recursive: true });
+
   const pkg = {
     name: 'dpsk-bridge',
     version: '0.4.0',
@@ -124,6 +129,7 @@ function upgradeCheckout(t) {
     engines: { node: '>=24.9' },
   };
   fs.writeFileSync(path.join(repository, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+
   return { base, repository, home: path.join(base, 'home') };
 }
 
@@ -135,10 +141,12 @@ function commitVersion(repository, version, extra = {}) {
   git(repository, ['commit', '-m', version]);
 }
 
+// Installer commands
 test('--help exits 0 and lists the commands and options', (t) => {
   const { home } = profile(t);
   const result = run(home, ['--help']);
   assert.equal(result.status, 0, result.stdout + result.stderr);
+
   for (const text of [
     'install',
     'upgrade',
@@ -159,6 +167,7 @@ test('install auto-detects Claude, syncs skills, and writes the install record',
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   const result = run(home, ['install']);
   assert.equal(result.status, 0, result.stdout + result.stderr);
+
   const skillsRoot = path.join(home, '.claude', 'skills');
   assertSkills(skillsRoot, true);
   assert.ok(
@@ -195,6 +204,7 @@ test('install honors explicit case-insensitive targets and reuses the legacy Gen
   const key = legacyGenericKey(destination);
   const state = path.join(home, '.dpsk-bridge');
   fs.mkdirSync(state, { recursive: true });
+
   // A 0.4.x Generic install: manifest and host record written by scripts/install.ps1.
   fs.writeFileSync(
     path.join(state, `installed-skills-generic-${key}.txt`),
@@ -214,6 +224,7 @@ test('install honors explicit case-insensitive targets and reuses the legacy Gen
     '--skills',
     destination,
   ]);
+
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assertSkills(path.join(home, '.agents', 'skills'), true);
   assertSkills(destination, true);
@@ -236,6 +247,7 @@ test('default install syncs detected harnesses plus recorded other hosts', (t) =
   const { home } = profile(t);
   const destination = path.join(home, 'custom', 'skills');
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+
   const first = run(home, ['install', '--target', 'other', '--skills', destination]);
   assert.equal(first.status, 0, first.stdout + first.stderr);
   const second = run(home, ['install']);
@@ -296,6 +308,7 @@ test('sync re-syncs every recorded host and repairs drifted skill files', (t) =>
   assert.equal(installed.status, 0, installed.stdout + installed.stderr);
   const drifted = path.join(home, '.claude', 'skills', 'deepseek-delegate', 'SKILL.md');
   fs.writeFileSync(drifted, 'locally edited instructions');
+
   const result = run(home, ['sync']);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /Claude skills updated/);
@@ -304,12 +317,14 @@ test('sync re-syncs every recorded host and repairs drifted skill files', (t) =>
   assert.match(fs.readFileSync(drifted, 'utf8'), /name: deepseek-delegate/);
 });
 
+// Upgrade
 test('upgrade fast-forwards a 0.4.x-style install and reuses its recorded hosts', (t) => {
   const { repository, home } = upgradeCheckout(t);
   fs.mkdirSync(home, { recursive: true });
   const state = path.join(home, '.dpsk-bridge');
   const skillsRoot = path.join(home, '.claude', 'skills');
   fs.mkdirSync(state, { recursive: true });
+
   fs.writeFileSync(path.join(state, 'installed-skills.txt'), `${skills.join(os.EOL)}${os.EOL}`);
   fs.writeFileSync(
     path.join(state, 'installed-skills.host.json'),
@@ -320,6 +335,7 @@ test('upgrade fast-forwards a 0.4.x-style install and reuses its recorded hosts'
   }
   fs.mkdirSync(path.join(state, 'backups'), { recursive: true });
   fs.writeFileSync(path.join(state, 'backups', 'keep-me.txt'), 'keep');
+
   // Simulate stale 0.4.x skill content that the upgrade must replace and prune.
   fs.mkdirSync(path.join(skillsRoot, 'deepseek-delegate', 'references'), { recursive: true });
   fs.writeFileSync(path.join(skillsRoot, 'deepseek-delegate', 'SKILL.md'), 'old instructions');
@@ -342,6 +358,7 @@ test('upgrade fast-forwards a 0.4.x-style install and reuses its recorded hosts'
     cwd: repository,
     extraEnv: { DPSK_INSTALLER_UPGRADE_TAG: 'v0.5.0' },
   });
+
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /Upgraded 0\.4\.0 → 0\.5\.0/);
   assert.equal(readJson(path.join(repository, 'package.json')).version, '0.5.0');
@@ -379,11 +396,13 @@ test('upgrade waits for running bridge jobs before changing the checkout', async
     id: 'running-job',
     workspace: repository,
   });
+
   const child = spawn(process.execPath, [core, 'upgrade'], {
     cwd: repository,
     windowsHide: true,
     env: environment(home, { DPSK_INSTALLER_UPGRADE_TAG: 'v0.5.0' }),
   });
+
   let stdout = '',
     stderr = '';
   child.stdout.setEncoding('utf8');
@@ -394,6 +413,7 @@ test('upgrade waits for running bridge jobs before changing the checkout', async
   child.stderr.on('data', (chunk) => {
     stderr += chunk;
   });
+
   const closed = new Promise((resolve) => child.once('close', resolve));
   const waiting = new Promise((resolve, reject) => {
     const timer = setTimeout(
@@ -414,6 +434,7 @@ test('upgrade waits for running bridge jobs before changing the checkout', async
   let code;
   try {
     await waiting;
+
     assert.equal(
       readJson(path.join(repository, 'package.json')).version,
       '0.4.0',
@@ -435,11 +456,13 @@ test('upgrade refuses a dirty checkout and diverged history', async (t) => {
     git(repository, ['add', '.']);
     git(repository, ['commit', '-m', '0.4.0']);
     fs.writeFileSync(path.join(repository, 'untracked.txt'), 'local data');
+
     const core = path.join(repository, 'scripts', 'installer-core.mjs');
     const result = runAt(core, home, ['upgrade'], {
       cwd: repository,
       extraEnv: { DPSK_INSTALLER_UPGRADE_TAG: 'v0.5.0' },
     });
+
     assert.equal(result.status, 1);
     assert.match(result.stderr, /local changes|untracked/);
     assert.equal(readJson(path.join(repository, 'package.json')).version, '0.4.0');
@@ -456,11 +479,13 @@ test('upgrade refuses a dirty checkout and diverged history', async (t) => {
     git(repository, ['checkout', '-b', 'installed', base]);
     commitVersion(repository, '0.4.1', { note: 'local divergence' });
     git(repository, ['remote', 'add', 'origin', officialOrigin]);
+
     const core = path.join(repository, 'scripts', 'installer-core.mjs');
     const result = runAt(core, home, ['upgrade'], {
       cwd: repository,
       extraEnv: { DPSK_INSTALLER_UPGRADE_TAG: 'v0.5.0' },
     });
+
     assert.equal(result.status, 1);
     assert.match(result.stderr, /not an ancestor|divergent/);
     assert.equal(readJson(path.join(repository, 'package.json')).version, '0.4.1');

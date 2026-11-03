@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
 import {
   runJob,
   readJob,
@@ -86,6 +87,7 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
 function background(t, options, home, onEvent = () => {}) {
   let id;
   const started = Promise.withResolvers();
+
   const running = runJob(
     options,
     (event) => {
@@ -98,9 +100,11 @@ function background(t, options, home, onEvent = () => {}) {
     home,
   );
   running.catch((error) => started.reject(error));
+
   t.after(async () => {
     try {
       const latest = readJob(id, home);
+
       if (
         ![
           'completed',
@@ -115,6 +119,7 @@ function background(t, options, home, onEvent = () => {}) {
     } catch {}
     await running.catch(() => {});
   });
+
   return { started: started.promise, running };
 }
 
@@ -155,11 +160,13 @@ test('wait returns request for a pending question and finished after the answer'
   const { options, home } = setup(t, '[chat] answer me');
   const { started, running } = background(t, options, home);
   const id = await started;
+
   const request = await waitJob({ id }, 10, home);
   assert.equal(request.reason, 'request');
   assert.equal(request.processState, 'running');
   assert.equal(request.pendingRequests.length, 1);
   assert.deepEqual(request.actionableRequests, [request.pendingRequests[0].requestId]);
+
   sendMessage(readJob(id, home), 'host follow up', home);
   answerRequest(
     readJob(id, home),
@@ -167,10 +174,12 @@ test('wait returns request for a pending question and finished after the answer'
     { answers: [{ id: 'choice', selected: [], custom: 'Continue' }] },
     home,
   );
+
   const finished = await waitJob({ id }, 10, home);
   assert.equal(finished.reason, 'finished');
   assert.equal(finished.reportedResult, 'OK');
   assert.deepEqual(finished.actionableRequests, []);
+
   const job = await running;
   assert.equal(job.processState, 'completed', job.error);
 });
@@ -181,39 +190,46 @@ test('question cap refuses the fourth answer until --user-ok, while approvals ne
   const { started, running } = background(t, options, home);
   const id = await started;
   const answer = { answers: [{ id: 'choice', selected: [], custom: 'Continue' }] };
+
   for (let n = 1; n <= 3; n++) {
     const request = await waitJob({ id }, 10, home);
     assert.equal(request.reason, 'request', `question ${n}`);
     assert.deepEqual(request.actionableRequests, [`q-${n}`]);
     answerRequest(readJob(id, home), `q-${n}`, answer, home);
   }
+
   const approval = await waitJob({ id }, 10, home);
   assert.equal(approval.reason, 'request');
   assert.equal(approval.pendingRequests[0].method, 'approval/request');
   assert.match(approval.pendingRequests[0].requestId, /^[a-f0-9-]{36}$/);
   assert.equal(readJob(id, home).answeredQuestions, 3);
+
   answerRequest(
     readJob(id, home),
     approval.pendingRequests[0].requestId,
     { outcome: 'allowed-once' },
     home,
   );
+
   const capped = await waitJob({ id }, 10, home);
   assert.equal(capped.reason, 'escalate');
   assert.deepEqual(capped.actionableRequests, ['q-4']);
   assert.equal(capped.answeredQuestions, 3);
   assert.equal(capped.questionCapLifted, false);
+
   assert.throws(
     () => answerRequest(readJob(id, home), 'q-4', answer, home),
     /already had 3 questions answered.*--user-ok/,
   );
   assert.equal(answerRequest(readJob(id, home), 'q-4', answer, home, true).state, 'queued');
+
   const lifted = await waitJob({ id }, 10, home);
   assert.equal(lifted.reason, 'request');
   assert.deepEqual(lifted.actionableRequests, ['q-5']);
   const after = readJob(id, home);
   assert.equal(after.answeredQuestions, 4);
   assert.equal(after.questionCapLifted, true);
+
   answerRequest(after, 'q-5', answer, home);
   const finished = await waitJob({ id }, 10, home);
   assert.equal(finished.reason, 'finished');
@@ -232,11 +248,13 @@ test('wait stops reporting a cancelled question as actionable', async (t) => {
   fs.writeFileSync(options.dshEntry, cancelFake);
   const { started, running } = background(t, options, home);
   const id = await started;
+
   await waitForEvent(id, home, 'request_cancelled');
   const waited = await waitJob({ id }, 1, home);
   assert.equal(waited.reason, 'timeout');
   assert.deepEqual(waited.actionableRequests, []);
   assert.deepEqual(waited.pendingRequests, []);
+
   cancelJob(readJob(id, home), home);
   const job = await running;
   assert.equal(job.processState, 'cancelled', job.error);
@@ -250,9 +268,11 @@ test('wait returns timeout for a running job and errors for bad timeouts or miss
   const waited = await waitJob({ id }, 1, home);
   assert.equal(waited.reason, 'timeout');
   assert.equal(waited.processState, 'running');
+
   // A monotonic lower bound, far below the 1 s timeout, proves wait blocked
   // without making the test sensitive to a slow machine.
   assert.ok(performance.now() - began >= 500, `wait returned after ${performance.now() - began}ms`);
+
   cancelJob(readJob(id, home), home);
   const job = await running;
   assert.equal(job.processState, 'cancelled', job.error);
@@ -267,6 +287,7 @@ test('context reminder is recorded once while running and wait returns context e
   fs.writeFileSync(options.dshEntry, contextFake);
   const { started, running } = background(t, { ...options, contextLimit: 100 }, home);
   const id = await started;
+
   const remembered = await until(() => {
     const record = readJob(id, home);
     return record.contextReminder && record.context?.tokens === 200 && record;
@@ -287,6 +308,7 @@ test('context reminder is recorded once while running and wait returns context e
   assert.equal(waited.context.tokens, 200);
   assert.equal(waited.actionableRequests.length, 0);
   assert.ok(fs.existsSync(path.join(home, 'jobs', id, 'context.reported')));
+
   const again = await waitJob({ id }, 1, home);
   assert.equal(again.reason, 'timeout');
 
@@ -299,6 +321,7 @@ test('context reminder is recorded once while running and wait returns context e
     eventsPage(job, 0, 200).events.filter((event) => event.event === 'context_reminder').length,
     1,
   );
+
   // Once the job has ended, an unreported reminder no longer delays finished.
   fs.rmSync(path.join(home, 'jobs', id, 'context.reported'));
   assert.equal((await waitJob({ id }, 1, home)).reason, 'finished');
@@ -312,6 +335,7 @@ test('wait keeps pending requests out of actionableRequests while the job is fin
   const dir = path.join(home, 'jobs', id),
     requestId = '00000000-0000-4000-8000-000000000002';
   fs.mkdirSync(dir, { recursive: true });
+
   const job = {
     version: 2,
     id,

@@ -9,25 +9,32 @@ import { once } from 'node:events';
 import { acquireSlot, releaseReservation } from '../lib/scheduler.mjs';
 import { liveProcessState } from '../lib/job-state.mjs';
 
+// Helpers
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const stale = (file) => {
   const old = new Date(Date.now() - 2 * 60 * 1000);
   fs.utimesSync(file, old, old);
 };
+
 const thisFile = fileURLToPath(import.meta.url);
 
 // The same file is an actual independent launcher in multiprocess tests.
 if (process.argv[2] === '--scheduler-worker') {
   const options = JSON.parse(process.argv[3]);
+
   try {
     const slot = await acquireSlot(options);
     if (options.recordChildPid) await slot.setChildPid(options.recordChildPid);
     if (options.marker) fs.writeFileSync(options.marker, String(process.pid), { flag: 'wx' });
+
     const start = process.hrtime.bigint().toString();
     process.send?.({ type: 'acquired', pid: process.pid, start });
+
     if (options.hold === 'manual') await once(process, 'message');
     else await delay(options.hold ?? 50);
     if (options.marker) fs.unlinkSync(options.marker);
+
     const end = process.hrtime.bigint().toString();
     await slot.release();
     process.send?.({ type: 'released', start, end });
@@ -50,9 +57,11 @@ if (process.argv[2] === '--scheduler-worker') {
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     return { root, home, workspace };
   }
+
   function options(f, id, extra = {}) {
     return { home: f.home, workspace: f.workspace, id, ...extra };
   }
+
   function state(f) {
     try {
       return JSON.parse(fs.readFileSync(path.join(f.home, 'scheduler', 'state.json'), 'utf8'));
@@ -61,6 +70,7 @@ if (process.argv[2] === '--scheduler-worker') {
       throw error;
     }
   }
+
   async function until(check, message = 'condition', timeout = 10000) {
     const deadline = Date.now() + timeout;
     while (!check()) {
@@ -68,17 +78,21 @@ if (process.argv[2] === '--scheduler-worker') {
       await delay(10);
     }
   }
+
   function worker(t, args) {
     const child = spawn(process.execPath, [thisFile, '--scheduler-worker', JSON.stringify(args)], {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
+
     let stderr = '';
     child.stderr.on('data', (data) => {
       stderr += data;
     });
+
     const messages = [];
     child.on('message', (message) => messages.push(message));
+
     const closed = new Promise((resolve, reject) => {
       child.once('error', reject);
       child.once('close', (code) =>
@@ -87,13 +101,16 @@ if (process.argv[2] === '--scheduler-worker') {
           : reject(new Error(`Worker exit ${code}: ${stderr}\n${JSON.stringify(messages)}`)),
       );
     });
+
     // Deliberately killed workers are handled by tests, but never cause an
     // unhandled rejection before their owner can await the result.
     closed.catch(() => {});
+
     t.after(async () => {
       if (child.exitCode == null && child.signalCode == null) child.kill('SIGKILL');
       await closed.catch(() => {});
     });
+
     return {
       child,
       messages,
@@ -112,12 +129,14 @@ if (process.argv[2] === '--scheduler-worker') {
       },
     };
   }
+
   async function deadPid() {
     const child = spawn(process.execPath, ['-e', ''], { windowsHide: true, stdio: 'ignore' });
     await once(child, 'close');
     return child.pid;
   }
 
+  // Reservation rules
   test('validates limits, normalizes future scopes, and rejects scope traversal and symlink escapes', async (t) => {
     const f = fixture(t);
     for (const maxConcurrent of [0, 257, 1.5, NaN])
@@ -133,18 +152,22 @@ if (process.argv[2] === '--scheduler-worker') {
     for (const scopes of [['../outside'], [path.join(f.root, 'outside')], ['']])
       await assert.rejects(acquireSlot(options(f, 'bad-scope', { scopes })), /scope/i);
     await assert.rejects(acquireSlot(options(f, '../bad-id')), /id/);
+
     fs.mkdirSync(path.join(f.workspace, 'actual'));
     const slot = await acquireSlot(
       options(f, 'normal', { scopes: ['./actual/../actual/not-created', 'actual/not-created'] }),
     );
+
     assert.equal(state(f).reservations[0].scopes.length, 1);
     assert.match(state(f).reservations[0].scopes[0], /actual[\\/]not-created$/);
     await slot.release();
     await slot.release();
     assert.deepEqual(state(f).reservations, []);
+
     await t.test('resolves existing symlinks before comparing scopes', async (subtest) => {
       const outside = path.join(f.root, 'outside');
       fs.mkdirSync(outside);
+
       try {
         fs.symlinkSync(
           outside,
@@ -158,10 +181,12 @@ if (process.argv[2] === '--scheduler-worker') {
         }
         throw error;
       }
+
       await assert.rejects(
         acquireSlot(options(f, 'escape', { scopes: ['escape/new/file'] })),
         /outside workspace/,
       );
+
       fs.symlinkSync(
         path.join(f.workspace, 'actual'),
         path.join(f.workspace, 'alias'),
@@ -183,15 +208,18 @@ if (process.argv[2] === '--scheduler-worker') {
     const reader2 = await acquireSlot(
       options(f, 'reader2', { scopes: ['reading/deep'], readOnly: true }),
     );
+
     const controller = new AbortController();
     const parent = acquireSlot(options(f, 'parent', { signal: controller.signal }));
     const checked = assert.rejects(parent, { name: 'AbortError' });
+
     await until(() =>
       state(f).reservations.some((item) => item.id === 'parent' && item.state === 'queued'),
     );
     assert.equal(state(f).reservations.find((item) => item.id === 'parent').state, 'queued');
     controller.abort();
     await checked;
+
     await Promise.all([left.release(), right.release(), reader.release(), reader2.release()]);
     const writer = await acquireSlot(options(f, 'writer', { scopes: ['reading'] }));
     await writer.release();
@@ -203,15 +231,18 @@ if (process.argv[2] === '--scheduler-worker') {
     const controller = new AbortController();
     const pending = acquireSlot(options(f, 'cancel', { signal: controller.signal }));
     const rejected = assert.rejects(pending, { name: 'AbortError' });
+
     await until(() => state(f).reservations.length === 2);
     controller.abort();
     await rejected;
+
     await assert.rejects(acquireSlot(options(f, 'timeout', { queueTimeoutMs: 70 })), {
       code: 'QUEUE_TIMEOUT',
     });
     await assert.rejects(acquireSlot(options(f, 'preabort', { signal: AbortSignal.abort() })), {
       name: 'AbortError',
     });
+
     assert.deepEqual(
       state(f).reservations.map((item) => item.id),
       ['first'],
@@ -225,11 +256,13 @@ if (process.argv[2] === '--scheduler-worker') {
     const reader = await acquireSlot(
       options(f, 'initial-reader', { scopes: ['a'], readOnly: true }),
     );
+
     const waitingWriter = acquireSlot(options(f, 'writer', { scopes: ['a'] })).then((slot) => {
       order.push('writer');
       return slot;
     });
     await until(() => state(f).reservations.some((item) => item.id === 'writer'));
+
     const laterReader = acquireSlot(
       options(f, 'later-reader', { scopes: ['a'], readOnly: true }),
     ).then((slot) => {
@@ -239,6 +272,7 @@ if (process.argv[2] === '--scheduler-worker') {
     const unrelated = await acquireSlot(options(f, 'unrelated', { scopes: ['b'] }));
     await delay(80);
     assert.deepEqual(order, []);
+
     await reader.release();
     const writer = await waitingWriter;
     await delay(70);
@@ -254,6 +288,7 @@ if (process.argv[2] === '--scheduler-worker') {
       order = [];
     const other = path.join(f.root, 'other');
     fs.mkdirSync(other);
+
     const initial = await acquireSlot(options(f, 'first', { maxConcurrent: 1 }));
     const secondPending = acquireSlot(
       options(f, 'second', { workspace: other, maxConcurrent: 1 }),
@@ -262,6 +297,7 @@ if (process.argv[2] === '--scheduler-worker') {
       return slot;
     });
     await until(() => state(f).reservations.some((item) => item.id === 'second'));
+
     const thirdPending = acquireSlot(options(f, 'third', { scopes: ['a'], maxConcurrent: 1 })).then(
       (slot) => {
         order.push(3);
@@ -270,6 +306,7 @@ if (process.argv[2] === '--scheduler-worker') {
     );
     await delay(50);
     assert.deepEqual(order, []);
+
     await initial.release();
     const second = await secondPending;
     await delay(60);
@@ -280,6 +317,7 @@ if (process.argv[2] === '--scheduler-worker') {
     assert.deepEqual(order, [2, 3]);
   });
 
+  // Recovery and liveness
   test('recorded children and live/unknown supervisors cannot be manually unlocked', async (t) => {
     const f = fixture(t),
       slot = await acquireSlot(options(f, 'live'));
@@ -299,6 +337,7 @@ if (process.argv[2] === '--scheduler-worker') {
       active = worker(t, options(f, 'crashed', { hold: 'manual' }));
     await active.wait('acquired');
     active.child.kill('SIGKILL');
+
     await active.closed.catch(() => {});
     let ran = false;
     const waiting = acquireSlot(options(f, 'next')).then((slot) => {
@@ -307,10 +346,12 @@ if (process.argv[2] === '--scheduler-worker') {
     });
     await until(() => state(f).reservations.some((item) => item.id === 'next'));
     await delay(100);
+
     assert.equal(ran, false);
     assert.equal(state(f).reservations.find((item) => item.id === 'crashed').state, 'active');
     await assert.rejects(releaseReservation(f.home, 'crashed'), /confirmed-stopped/);
     await releaseReservation(f.home, 'crashed', { confirmedStopped: true });
+
     const slot = await waiting;
     await slot.release();
     assert.deepEqual(state(f).reservations, []);
@@ -325,6 +366,7 @@ if (process.argv[2] === '--scheduler-worker') {
       options(f, 'crashed', { scopes: ['shared'], hold: 'manual', heartbeatFile }),
     );
     await crashed.wait('acquired');
+
     const dir = path.join(f.home, 'jobs', 'crashed'),
       eventsFile = path.join(dir, 'events.jsonl');
     fs.mkdirSync(dir, { recursive: true });
@@ -345,17 +387,21 @@ if (process.argv[2] === '--scheduler-worker') {
     };
     fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(record));
     fs.writeFileSync(eventsFile, '');
+
     crashed.child.kill('SIGKILL');
     await crashed.closed.catch(() => {});
     stale(heartbeatFile);
     const next = await acquireSlot(options(f, 'next', { scopes: ['shared'] }));
+
     assert.deepEqual(
       state(f).reservations.map((item) => item.id),
       ['next'],
     );
+
     // The job record must not be rewritten: only the event log explains the release.
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8')), record);
     assert.equal(liveProcessState(record), 'unknown');
+
     const events = fs
       .readFileSync(eventsFile, 'utf8')
       .trim()
@@ -365,6 +411,7 @@ if (process.argv[2] === '--scheduler-worker') {
     assert.equal(events[0].event, 'reservation_released');
     assert.equal(events[0].reason, 'launcher and dsh process gone, heartbeat stale');
     assert.ok(Number.isSafeInteger(events[0].time));
+
     await next.release();
   });
 
@@ -379,16 +426,19 @@ if (process.argv[2] === '--scheduler-worker') {
     await crashed.wait('acquired');
     crashed.child.kill('SIGKILL');
     await crashed.closed.catch(() => {});
+
     // The heartbeat was written moments ago, so the launcher may still be alive elsewhere.
     await assert.rejects(
       acquireSlot(options(f, 'next', { scopes: ['shared'], queueTimeoutMs: 300 })),
       { code: 'QUEUE_TIMEOUT' },
     );
     assert.equal(state(f).reservations.find((item) => item.id === 'fresh').state, 'active');
+
     // Once the heartbeat is stale the reservation is abandoned; any successful
     // transaction now prunes it, so manual recovery has nothing left to clear.
     stale(heartbeatFile);
     const cleanup = await acquireSlot(options(f, 'cleanup', { scopes: ['cleanup'] }));
+
     assert.deepEqual(
       state(f).reservations.map((item) => item.id),
       ['cleanup'],
@@ -397,12 +447,14 @@ if (process.argv[2] === '--scheduler-worker') {
       releaseReservation(f.home, 'fresh', { confirmedStopped: true }),
       /No scheduler reservation/,
     );
+
     await cleanup.release();
   });
 
   test('an active reservation with a surviving child keeps its slot', async (t) => {
     const f = fixture(t),
       heartbeatFile = path.join(f.root, 'heartbeat');
+
     fs.writeFileSync(heartbeatFile, '');
     const crashed = worker(
       t,
@@ -414,13 +466,16 @@ if (process.argv[2] === '--scheduler-worker') {
       }),
     );
     await crashed.wait('acquired');
+
     crashed.child.kill('SIGKILL');
     await crashed.closed.catch(() => {});
     stale(heartbeatFile);
+
     await assert.rejects(
       acquireSlot(options(f, 'next', { scopes: ['shared'], queueTimeoutMs: 300 })),
       { code: 'QUEUE_TIMEOUT' },
     );
+
     const kept = state(f).reservations.find((item) => item.id === 'child');
     assert.equal(kept.state, 'active');
     assert.equal(kept.childPid, process.pid);
@@ -449,8 +504,10 @@ if (process.argv[2] === '--scheduler-worker') {
     await until(() =>
       state(f).reservations.some((item) => item.id === 'dead-queued' && item.state === 'queued'),
     );
+
     waiting.child.kill('SIGKILL');
     await waiting.closed.catch(() => {});
+
     const gate = path.join(
       f.home,
       'scheduler',
@@ -459,9 +516,11 @@ if (process.argv[2] === '--scheduler-worker') {
     );
     fs.mkdirSync(gate);
     fs.writeFileSync(path.join(gate, 'ticket.json'), '{"ticket":1}');
+
     await initial.release();
     const next = await acquireSlot(options(f, 'next'));
     await next.release();
+
     assert.deepEqual(state(f).reservations, []);
     assert.equal(fs.existsSync(gate), false);
   });
@@ -470,6 +529,7 @@ if (process.argv[2] === '--scheduler-worker') {
     const f = fixture(t),
       other = path.join(f.root, 'other');
     fs.mkdirSync(other);
+
     const current = await acquireSlot(options(f, 'current', { readOnly: true }));
     let updateAcquired = false,
       laterAcquired = false;
@@ -481,6 +541,7 @@ if (process.argv[2] === '--scheduler-worker') {
     });
     await until(() => state(f).reservations.some((item) => item.id === 'updating'));
     assert.equal(state(f).reservations.find((item) => item.id === 'updating').exclusive, true);
+
     const later = acquireSlot(
       options(f, 'later', { workspace: other, scopes: ['disjoint'], readOnly: true }),
     ).then((slot) => {
@@ -489,24 +550,28 @@ if (process.argv[2] === '--scheduler-worker') {
     });
     await until(() => state(f).reservations.some((item) => item.id === 'later'));
     await delay(70);
+
     assert.equal(updateAcquired, false);
     assert.equal(laterAcquired, false);
     await current.release();
     const update = await updating;
     await delay(70);
     assert.equal(laterAcquired, false);
+
     assert.deepEqual(
       state(f)
         .reservations.filter((item) => item.state === 'active')
         .map((item) => item.id),
       ['updating'],
     );
+
     await update.release();
     const last = await later;
     await last.release();
     assert.deepEqual(state(f).reservations, []);
   });
 
+  // Multiprocess
   test(
     'a real updater waits for every active process, then later jobs wait for its release',
     { timeout: 30000 },
@@ -516,6 +581,7 @@ if (process.argv[2] === '--scheduler-worker') {
         t,
         options(f, 'current', { scopes: ['a'], readOnly: true, hold: 'manual' }),
       );
+
       const current2 = worker(
         t,
         options(f, 'current2', { scopes: ['b'], readOnly: true, hold: 'manual' }),
@@ -528,6 +594,7 @@ if (process.argv[2] === '--scheduler-worker') {
       await until(() =>
         state(f).reservations.some((item) => item.id === 'updater' && item.state === 'queued'),
       );
+
       const other = path.join(f.root, 'other');
       fs.mkdirSync(other);
       const later = worker(
@@ -537,6 +604,7 @@ if (process.argv[2] === '--scheduler-worker') {
       await until(() =>
         state(f).reservations.some((item) => item.id === 'later' && item.state === 'queued'),
       );
+
       current.child.send('release');
       await current.closed;
       await delay(70);
@@ -547,6 +615,7 @@ if (process.argv[2] === '--scheduler-worker') {
       current2.child.send('release');
       await current2.closed;
       await updater.wait('acquired');
+
       await delay(70);
       assert.equal(
         later.messages.some((message) => message.type === 'acquired'),
@@ -557,6 +626,7 @@ if (process.argv[2] === '--scheduler-worker') {
       await later.wait('acquired');
       later.child.send('release');
       await later.closed;
+
       assert.deepEqual(state(f).reservations, []);
     },
   );
@@ -570,7 +640,9 @@ if (process.argv[2] === '--scheduler-worker') {
       const workers = Array.from({ length: 12 }, (_, index) =>
         worker(t, options(f, `writer-${index}`, { marker, hold: 35 })),
       );
+
       await Promise.all(workers.map((item) => item.closed));
+
       assert.equal(
         workers.flatMap((item) => item.messages).filter((message) => message.type === 'released')
           .length,
@@ -596,6 +668,7 @@ if (process.argv[2] === '--scheduler-worker') {
           }),
         ),
       );
+
       await Promise.all(workers.map((item) => item.closed));
       const events = workers
         .map((item) => item.messages.find((message) => message.type === 'released'))
@@ -604,6 +677,7 @@ if (process.argv[2] === '--scheduler-worker') {
           { at: BigInt(end), change: -1 },
         ])
         .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.change - b.change));
+
       let running = 0,
         peak = 0;
       for (const event of events) {
@@ -611,6 +685,7 @@ if (process.argv[2] === '--scheduler-worker') {
         peak = Math.max(peak, running);
         assert.ok(running <= 3);
       }
+
       assert.equal(peak, 3);
       assert.equal(running, 0);
       assert.deepEqual(state(f).reservations, []);
@@ -637,6 +712,7 @@ if (process.argv[2] === '--scheduler-worker') {
           }),
         );
       });
+
       await Promise.all(workers.map((item) => item.closed));
       assert.deepEqual(state(f).reservations, []);
     },

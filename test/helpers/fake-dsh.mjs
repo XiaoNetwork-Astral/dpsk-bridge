@@ -76,14 +76,17 @@ export function setup(t, brief) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
+
   const entry = path.join(root, 'runtime', 'lib', 'bin.mjs');
   fs.writeFileSync(entry, fake);
   fs.writeFileSync(
     path.join(root, 'runtime', 'package.json'),
     JSON.stringify({ version: dshVersion }),
   );
+
   const briefFile = path.join(root, 'brief.md');
   fs.writeFileSync(briefFile, brief);
+
   return {
     root,
     home: path.join(root, 'bridge'),

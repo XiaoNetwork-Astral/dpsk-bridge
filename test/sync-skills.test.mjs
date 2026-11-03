@@ -16,6 +16,7 @@ function profile(t) {
   fs.mkdirSync(state, { recursive: true });
   return { home, state };
 }
+
 // sync-skills.mjs is only a thin call into installer-core.mjs, so redirect the
 // user profile (records and destination roots) on every platform.
 function sync(home) {
@@ -32,6 +33,7 @@ function sync(home) {
     },
   });
 }
+
 function assertSkills(root) {
   for (const name of skills)
     assert.ok(fs.existsSync(path.join(root, name, 'SKILL.md')), path.join(root, name));
@@ -41,6 +43,7 @@ test('sync-skills executes against temporary records and handles a known and an 
   const { home, state } = profile(t);
   const claudeRoot = path.join(home, '.claude', 'skills');
   const customRoot = path.join(home, 'custom-host', 'skills');
+
   fs.writeFileSync(
     path.join(state, 'installed-skills.host.json'),
     JSON.stringify({ target: 'Claude', root: claudeRoot }),
@@ -56,6 +59,7 @@ test('sync-skills executes against temporary records and handles a known and an 
   assertSkills(claudeRoot);
   assertSkills(customRoot);
   assert.ok(fs.existsSync(path.join(state, 'installed-skills.txt')));
+
   const genericManifests = fs
     .readdirSync(state)
     .filter((name) => /^installed-skills-generic-[A-Fa-f0-9]{16}\.txt$/.test(name));
@@ -65,10 +69,12 @@ test('sync-skills executes against temporary records and handles a known and an 
 
 test('sync-skills rejects a host record whose skills directory is not absolute', (t) => {
   const { home, state } = profile(t);
+
   fs.writeFileSync(
     path.join(state, 'installed-skills.host.json'),
     JSON.stringify({ target: 'Claude', root: 'relative/skills' }),
   );
+
   const result = sync(home);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /Invalid host record: installed-skills\.host\.json/);

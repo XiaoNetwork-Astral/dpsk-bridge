@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+
 import {
   renderFrame,
   geometry,
@@ -19,6 +20,7 @@ import {
 import { charWidth, cut, displayWidth, styler, truncate, wrapText } from '../lib/viewer/text.mjs';
 
 const now = new Date(2026, 0, 15, 12).getTime();
+
 const session = (id, overrides = {}) => ({
   id,
   file: `/tmp/${id}/session.v4.jsonl`,
@@ -44,6 +46,7 @@ const session = (id, overrides = {}) => ({
   readError: null,
   ...overrides,
 });
+
 const detailFor = (lines) => ({
   lines,
   keys: lines.map(() => 'final'),
@@ -51,8 +54,10 @@ const detailFor = (lines) => ({
   scroll: 0,
   cursorKey: 'final',
 });
+
 const framePlain = (frame) =>
   frame.lines.map((line) => line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ''));
+
 /** Text painted in 1-based display columns x0..x1 of a plain line. */
 function columnsOf(line, x0, x1) {
   let column = 1,
@@ -71,6 +76,7 @@ function model(overrides = {}) {
     session('c', { mtime: now - 3 * 86_400_000, title: '本周任务' }),
     session('d', { mtime: now - 12 * 86_400_000, title: '更早任务' }),
   ];
+
   return {
     columns: 120,
     rows: 30,
@@ -95,10 +101,13 @@ test('wide layout has a status bar, grouped two-line sessions, a result pane and
   assert.doesNotMatch(plain[0], /dsv|Reading|Process/);
   assert.match(plain[0], /● 1 running/);
   assert.match(plain[0], /v0\.4\.1/);
+
   // Detail title: status, project, task; two-space separated, no dots.
   assert.match(plain[1], /╭ Sessions/);
   assert.match(plain[1], /╭ ● Running  b  优化会话查看器 ─+╮$/);
+
   const text = plain.join('\n');
+
   // 运行中 / 已完成 at the top level; running split by state, finished by day.
   assert.match(text, /^│ {2}▾ Running +│/m);
   assert.match(text, /^│ {4}▾ Active +│/m);
@@ -114,6 +123,7 @@ test('wide layout has a status bar, grouped two-line sessions, a result pane and
   assert.doesNotMatch(text, / · /);
   assert.match(text, /Result/);
   assert.match(text, /已完成阅读界面调整/);
+
   // The view switch sits in the bottom-right corner of the detail box.
   assert.match(plain[28], / d {3}Reading │ Process +╯$/);
   const { reading, process, toggle } = frame.hits.viewTabs;
@@ -122,9 +132,11 @@ test('wide layout has a status bar, grouped two-line sessions, a result pane and
   assert.ok(process.x0 > reading.x1);
   assert.equal(columnsOf(plain[28], reading.x0, reading.x1).trim(), 'Reading');
   assert.equal(columnsOf(plain[28], process.x0, process.x1).trim(), 'Process');
+
   assert.match(plain.at(-1), /Tab +Panel/);
   assert.match(plain.at(-1), /\? +Help +q +Quit $/);
   for (const line of plain) assert.equal(displayWidth(line), 120);
+
   assert.equal(frame.hits.list[0].y, 3);
   assert.equal(frame.hits.list[0].key, 'group:running');
   assert.ok(frame.hits.detail.some((hit) => hit.key === 'final'));
@@ -146,6 +158,7 @@ test('narrow layout paints exactly one panel and switches between list and detai
       detail: detailFor(['', 'Result', '', '  答案']),
     }),
   );
+
   const detailText = framePlain(detail).join('\n');
   assert.match(framePlain(detail)[1], /● Running  b  优化会话查看器/);
   assert.doesNotMatch(detailText, /▾ Running/);
@@ -169,6 +182,7 @@ test('CJK-aware truncation and wrapping never split a wide character in half', (
   assert.ok(truncate('中文中文中文', 5).endsWith('…'));
   assert.equal(cut('  中文   文本  ', 20), '中文 文本');
   for (const line of wrapText('中文中文中文abc', 3)) assert.ok(displayWidth(line) <= 3, line);
+
   const long = '超长任务标题'.repeat(20);
   const frame = renderFrame(
     model({
@@ -177,6 +191,7 @@ test('CJK-aware truncation and wrapping never split a wide character in half', (
       selectedId: 'b',
     }),
   );
+
   assert.match(frame.lines[1], /…/);
   for (const line of framePlain(frame)) assert.equal(displayWidth(line), 120);
 });
@@ -184,8 +199,10 @@ test('CJK-aware truncation and wrapping never split a wide character in half', (
 test('help overlays the detail pane and keeps the complete key table available', () => {
   // Tall enough for the whole wrapped help; shorter windows scroll it (tested below).
   const frame = renderFrame(model({ help: true, rows: 40 }));
+
   const text = framePlain(frame).join('\n');
   assert.match(framePlain(frame)[1], /Help  \? to close/);
+
   for (const value of [
     'Sessions',
     'Transcript',
@@ -200,6 +217,7 @@ test('help overlays the detail pane and keeps the complete key table available',
     '? or Esc closes',
   ])
     assert.ok(text.includes(value), value);
+
   assert.match(text, /▾ Running/);
 });
 
@@ -208,6 +226,7 @@ test('flattening expands only requested blocks and anchoring keeps the head row 
     { key: 'a', lines: ['a0'], full: ['a0', 'a1', 'a2'], expandable: true },
     { key: 'b', lines: ['b0'], full: ['b0', 'b1'], expandable: true },
   ];
+
   const closed = flattenBlocks(blocks);
   assert.deepEqual(closed.lines, ['a0', 'b0']);
   const open = flattenBlocks(blocks, { expanded: new Set(['a']) });
@@ -218,6 +237,7 @@ test('flattening expands only requested blocks and anchoring keeps the head row 
   assert.equal(moveBlockKey(open.starts, 'b', -1), 'a');
   assert.equal(moveBlockKey(open.starts, 'a', -1), 'a');
   assert.equal(moveBlockKey(open.starts, 'b', 1), 'b');
+
   // Expanding block b must keep its first line on the same screen row.
   const anchorClosed = flattenBlocks([
     { key: 'head', lines: ['head0', 'head1', 'head2', 'head3'], full: null, expandable: false },
@@ -230,12 +250,14 @@ test('flattening expands only requested blocks and anchoring keeps the head row 
     ],
     { expanded: new Set(['b']) },
   );
+
   const scroll = anchoredScroll(
     anchorClosed.starts.get('b'),
     2,
     anchorExpanded.starts.get('b'),
     100,
   );
+
   assert.equal(anchorExpanded.starts.get('b') - scroll, anchorClosed.starts.get('b') - 2);
   assert.equal(anchoredScroll(0, 0, 0, 100), 0);
 });
@@ -245,6 +267,7 @@ test('block building is lazy: process blocks do not wrap every tool body up fron
     { type: 'session', version: 4, id: 'x', cwd: '/work/x', createdAt: now },
     { type: 'turn/start', seq: 1, data: { turn: 1 } },
   ];
+
   for (let index = 0; index < 40; index++) {
     events.push(
       {
@@ -275,14 +298,19 @@ test('block building is lazy: process blocks do not wrap every tool body up fron
       },
     );
   }
+
   const blocks = buildBlocks(events, { view: 'process', columns: 80, st: styler(false) });
   assert.ok(blocks.length >= 40);
+
   const tool = blocks.find((block) => block.kind === 'tool');
   assert.ok(tool);
+
   // Accessing the collapsed form must not force the expanded body.
   assert.ok(Array.isArray(tool.lines));
+
   const flat = flattenBlocks(blocks);
   assert.ok(flat.lines.length < 80);
+
   const expanded = flattenBlocks(blocks, { expanded: new Set([tool.key]) });
   assert.ok(expanded.lines.length > flat.lines.length);
 });
@@ -307,6 +335,7 @@ test('geometry keeps the detail block width consistent with what layout paints',
     const panel = frame.hits.detailPanel,
       line = framePlain(frame)[2];
     const painted = columnsOf(line, panel.x0, panel.x1);
+
     assert.equal(
       displayWidth(painted),
       geo.detailWidth + 2,
@@ -318,6 +347,7 @@ test('geometry keeps the detail block width consistent with what layout paints',
       `${columns}: painted content width`,
     );
   }
+
   const items = listItems({
     sessions: model().sessions,
     selectedId: 'b',
@@ -344,14 +374,17 @@ test('a folded day group stays folded when a newer day appears', () => {
   const yesterday = session('day-15', { mtime: now - 10 * 60_000 });
   const older = session('day-14', { mtime: now - day });
   const toggled = new Map([['day:2026-01-15', true]]);
+
   const before = listItems({ sessions: [yesterday, older], toggledGroups: toggled, now });
   assert.ok(before.items.some((item) => item.key === 'group:day:2026-01-15' && item.collapsed));
+
   const latest = session('day-16', { mtime: now + day - 10 * 60_000 });
   const after = listItems({
     sessions: [latest, yesterday, older],
     toggledGroups: toggled,
     now: now + day,
   });
+
   assert.equal(
     after.collapsedOf('day:2026-01-16'),
     false,
@@ -369,6 +402,7 @@ test('the list scrolls with the cursor and keeps it inside the box', () => {
   const sessions = Array.from({ length: 30 }, (_, index) =>
     session(`s${index}`, { title: `任务${index}号`, mtime: now - index * 1000 }),
   );
+
   let top = 0;
   for (const index of [0, 10, 20, 29, 25, 3]) {
     const frame = renderFrame(
@@ -382,8 +416,10 @@ test('the list scrolls with the cursor and keeps it inside the box', () => {
       }),
     );
     top = frame.listTop;
+
     const plain = framePlain(frame);
     const row = plain.findIndex((line) => line.includes(`任务${index}号`) && line.startsWith('│▌'));
+
     // Screen rows 3..18 (0-based 2..17) are inside the list box.
     assert.ok(row >= 2 && row <= 17, `cursor ${index} visible inside the list box (row ${row})`);
     assert.ok(frame.hits.list.some((hit) => hit.key === `session:s${index}` && hit.y === row + 1));
@@ -400,7 +436,9 @@ test('footer keeps help and quit at every width and drops lower-priority keys fi
       assert.ok(frame.hits.footer.some((hit) => hit.key === '?'));
     }
   }
+
   const narrow = framePlain(renderFrame(model({ columns: 60 }))).at(-1);
+
   // Panel navigation outranks everything else when space is short.
   assert.match(narrow, /Enter +Open +Tab +Panel/);
   assert.doesNotMatch(narrow, /Follow/);
@@ -416,10 +454,12 @@ test('finished sessions linger in the running group, and a held session stays wh
   const old = session('o', { title: '早已结束', state: 'done', mtime: now - 10 * 60_000 });
   const stale = session('s', { title: '没人管的会话', state: 'quiet', mtime: now - 2 * 3600_000 });
   const quiet = session('q', { title: '暂时没动静', state: 'quiet', mtime: now - 6 * 60_000 });
+
   const keys = (held = new Set(), at = now) =>
     listItems({ sessions: [ended, old, stale, quiet], held, now: at }).items.map(
       (item) => item.key,
     );
+
   assert.deepEqual(keys(), [
     'group:running',
     'group:running:quiet',
@@ -431,9 +471,11 @@ test('finished sessions linger in the running group, and a held session stays wh
     'session:o',
     'session:s',
   ]);
+
   // Three minutes later the ended session has moved to 已完成 ...
   const later = keys(new Set(), now + 3 * 60_000);
   assert.ok(later.indexOf('session:e') > later.indexOf('group:done'));
+
   // ... unless it is held because the user is still looking at it.
   const held = keys(new Set(['e']), now + 3 * 60_000);
   assert.ok(held.indexOf('session:e') < held.indexOf('group:done'));
@@ -453,16 +495,21 @@ test('help wraps to the box width and scrolls when it does not fit', () => {
     if (width < 70)
       assert.ok(lines.length > helpLines().length, 'long lines wrap instead of being cut');
   }
+
   const top = framePlain(
     renderFrame(model({ help: true, columns: 80, rows: 10, focus: 'detail' })),
   ).join('\n');
+
   assert.match(top, /Sessions +↑↓/);
   assert.doesNotMatch(top, /or Esc closes/);
+
   const bottom = framePlain(
     renderFrame(model({ help: true, columns: 80, rows: 10, focus: 'detail', helpScroll: 999 })),
   ).join('\n');
+
   assert.match(bottom, /or Esc closes/);
   assert.doesNotMatch(bottom, /Sessions +↑↓/);
+
   // While help is open the footer offers scrolling and closing.
   assert.match(
     framePlain(renderFrame(model({ help: true }))).at(-1),
@@ -480,6 +527,7 @@ test('the list never starts in the middle of a two-line session', () => {
   const sessions = Array.from({ length: 30 }, (_, index) =>
     session(`s${index}`, { title: `任务${index}号`, mtime: now - 3600_000 - index * 1000 }),
   );
+
   let top = 0;
   for (let index = 0; index < 30; index++) {
     const frame = renderFrame(
@@ -493,6 +541,7 @@ test('the list never starts in the middle of a two-line session', () => {
       }),
     );
     top = frame.listTop;
+
     const firstRow = framePlain(frame)[2];
     assert.doesNotMatch(
       firstRow,

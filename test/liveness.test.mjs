@@ -25,6 +25,7 @@ import { acquireSlot, releaseReservation } from '../lib/scheduler.mjs';
 import { setup } from './helpers/fake-dsh.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const stale = (file) => {
   const old = new Date(Date.now() - 2 * 60 * 1000);
   fs.utimesSync(file, old, old);
@@ -73,6 +74,7 @@ test('a stale heartbeat also stops send, answer, and cancel', (t) => {
   const heartbeatFile = path.join(root, 'heartbeat');
   fs.writeFileSync(heartbeatFile, '');
   stale(heartbeatFile);
+
   const job = {
     version: 2,
     processState: 'running',
@@ -80,6 +82,7 @@ test('a stale heartbeat also stops send, answer, and cancel', (t) => {
     heartbeatFile,
     pendingRequests: [{ requestId: 'request-1', method: 'user-question/ask', params: {} }],
   };
+
   assert.throws(() => sendMessage(job, 'hello', root), /heartbeat/);
   assert.throws(() => answerRequest(job, 'request-1', {}, root), /heartbeat/);
   assert.throws(() => cancelJob(job, root), /heartbeat/);
@@ -95,6 +98,7 @@ test('a fresh heartbeat stays live while idle beyond one heartbeat interval', (t
   const touchedAt = Date.now();
   touchHeartbeat(heartbeatFile, touchedAt);
   const job = { version: 2, processState: 'running', supervisorPid: process.pid, heartbeatFile };
+
   // Older than the 5 s refresh interval but well inside the 60 s margin.
   assert.equal(liveProcessState(job, touchedAt + 5000 + 2000), 'running');
   assert.equal(liveProcessState(job, touchedAt + 61000), 'unknown');
@@ -117,6 +121,7 @@ test('wait returns unknown for a stale heartbeat instead of waiting forever', as
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(heartbeatFile, '');
   stale(heartbeatFile);
+
   const job = {
     version: 2,
     id,
@@ -135,8 +140,10 @@ test('wait returns unknown for a stale heartbeat instead of waiting forever', as
     stderrFile: path.join(dir, 'stderr.log'),
     eventsFile: path.join(dir, 'events.jsonl'),
   };
+
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
   const waited = await waitJob({ id }, 1, home);
+
   assert.equal(waited.reason, 'unknown');
   assert.equal(waited.processState, 'unknown');
 });
@@ -153,8 +160,10 @@ test('the supervisor refreshes its heartbeat while the job stays idle', async (t
   );
   try {
     await until(() => id);
+
     const record = readJob(id, home);
     const first = fs.statSync(record.heartbeatFile).mtimeMs;
+
     await until(() => fs.statSync(record.heartbeatFile).mtimeMs > first);
     const second = fs.statSync(record.heartbeatFile).mtimeMs;
     await until(() => fs.statSync(record.heartbeatFile).mtimeMs > second);
@@ -175,6 +184,7 @@ test('the supervisor refreshes its heartbeat while the job stays idle', async (t
       )
         cancelJob(record, home);
     } catch {}
+
     await running.catch(() => {});
   }
 });
@@ -187,6 +197,7 @@ test('unlock proceeds past an existing child PID when the supervisor heartbeat i
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(heartbeatFile, '');
   stale(heartbeatFile);
+
   const supervisorPid = await deadPid(),
     childPid = process.pid;
   const job = {
@@ -205,6 +216,7 @@ test('unlock proceeds past an existing child PID when the supervisor heartbeat i
     cwd: root,
   };
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
+
   const stateFile = path.join(home, 'scheduler', 'state.json');
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
   fs.writeFileSync(
@@ -233,6 +245,7 @@ test('unlock proceeds past an existing child PID when the supervisor heartbeat i
       ],
     }),
   );
+
   const unlocked = await unlockJob(job, true, home);
   assert.equal(unlocked.unlocked, true);
   assert.match(unlocked.warning, new RegExp(`child ${childPid}`));
@@ -244,6 +257,7 @@ test('unlock still refuses a live supervisor or a legacy reused PID', async (t) 
   const id = '00000000-0000-4000-8000-000000000062';
   const dir = path.join(home, 'jobs', id);
   fs.mkdirSync(dir, { recursive: true });
+
   const legacy = {
     version: 2,
     id,
@@ -259,6 +273,7 @@ test('unlock still refuses a live supervisor or a legacy reused PID', async (t) 
     cwd: root,
   };
   fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(legacy));
+
   await assert.rejects(unlockJob(legacy, true, home), /still present/);
   const fresh = { ...legacy, heartbeatFile: path.join(dir, 'heartbeat') };
   fs.writeFileSync(fresh.heartbeatFile, '');
@@ -270,17 +285,21 @@ test('the scheduler releases a reservation whose supervisor heartbeat is stale',
   const heartbeatFile = path.join(home, 'reservation-heartbeat');
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(heartbeatFile, '');
+
   const state = () =>
     JSON.parse(fs.readFileSync(path.join(home, 'scheduler', 'state.json'), 'utf8'));
+
   const live = await acquireSlot({ home, workspace, id: 'fresh-owner', heartbeatFile });
   await assert.rejects(
     releaseReservation(home, 'fresh-owner', { confirmedStopped: true }),
     /still present/,
   );
   await live.release();
+
   const slot = await acquireSlot({ home, workspace, id: 'stale-owner', heartbeatFile });
   stale(heartbeatFile);
   await releaseReservation(home, 'stale-owner', { confirmedStopped: true });
+
   assert.deepEqual(state().reservations, []);
   await slot.release().catch(() => {});
 });

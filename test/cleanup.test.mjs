@@ -29,6 +29,7 @@ function environment(home, prefix, bin) {
   const pathValue = windows
     ? [bin, path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')].join(';')
     : [bin, '/usr/bin', '/bin'].join(':');
+
   return {
     ...process.env,
     HOME: home,
@@ -43,6 +44,7 @@ function environment(home, prefix, bin) {
 
 function runCleanup(home, prefix, bin, args = []) {
   const env = environment(home, prefix, bin);
+
   if (windows) {
     // PATH is restricted above, so start Windows PowerShell by its full path.
     const powershell = path.join(
@@ -66,6 +68,7 @@ function runCleanup(home, prefix, bin, args = []) {
       { env, encoding: 'utf8', timeout: 120000, windowsHide: true },
     );
   }
+
   return spawnSync('bash', [cleanupPath, ...args], { env, encoding: 'utf8', timeout: 120000 });
 }
 
@@ -113,6 +116,7 @@ test('cleanup removes confirmed skills and launchers, keeps everything else', (t
   const state = path.join(home, '.dpsk-bridge');
   const claudeSkills = path.join(home, '.claude', 'skills');
   const codexSkills = path.join(home, '.agents', 'skills');
+
   fs.mkdirSync(state, { recursive: true });
   fs.writeFileSync(path.join(state, 'settings.json'), '{}\n');
   fs.writeFileSync(path.join(state, 'installed-skills.txt'), 'deepseek-delegate\n');
@@ -161,6 +165,7 @@ test('cleanup removes confirmed skills and launchers, keeps everything else', (t
   ]) {
     assert.equal(fs.existsSync(removed), false, `${removed} must be removed`);
   }
+
   for (const kept of [
     path.join(claudeSkills, 'notes-to-self'),
     path.join(codexSkills, 'dsh-mcp'),
@@ -171,6 +176,7 @@ test('cleanup removes confirmed skills and launchers, keeps everything else', (t
   ]) {
     assert.equal(fs.existsSync(kept), true, `${kept} must be kept`);
   }
+
   for (const record of [
     'install.json',
     'installed-skills.txt',
@@ -184,6 +190,7 @@ test('cleanup removes confirmed skills and launchers, keeps everything else', (t
       `${record} must be removed so the next install starts fresh`,
     );
   }
+
   assert.equal(fs.existsSync(shimPath(bin, 'dsb')), false, 'the PATH launcher must be removed');
   assert.equal(
     fs.existsSync(shimPath(prefix, 'dsv')),
@@ -195,10 +202,12 @@ test('cleanup removes confirmed skills and launchers, keeps everything else', (t
     .readdirSync(path.join(state, 'backups'))
     .filter((name) => name.endsWith('.bak'));
   assert.equal(backups.length, 3, 'each removed skill folder must be backed up');
+
   assert.ok(
     backups.some((name) => name.includes('deepseek-delegate')),
     'the backup name must identify the skill',
   );
+
   const delegateBackup = path.join(
     state,
     'backups',

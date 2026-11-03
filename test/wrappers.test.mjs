@@ -111,6 +111,7 @@ function git(cwd, args) {
     ],
     { cwd, encoding: 'utf8', windowsHide: true },
   );
+
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
@@ -157,12 +158,14 @@ function bridgePackage(version) {
 function releaseCheckout(t) {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-release-'));
   t.after(() => fs.rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
   const repository = path.join(base, 'checkout');
   copyBridge(repository);
   fs.writeFileSync(
     path.join(repository, 'package.json'),
     JSON.stringify(bridgePackage(packageJson.version), null, 2) + '\n',
   );
+
   git(repository, ['init']);
   git(repository, ['add', '.']);
   git(repository, ['commit', '-m', packageJson.version]);
@@ -170,6 +173,7 @@ function releaseCheckout(t) {
   git(repository, ['remote', 'add', 'origin', officialOrigin]);
   const home = path.join(base, 'home');
   fs.mkdirSync(home, { recursive: true });
+
   return { base, repository, home };
 }
 
@@ -182,6 +186,7 @@ function cloneEnvironment(base, repository, extra = {}) {
     `[url "${pathToFileURL(path.join(repository, '.git')).href}"]\n\tinsteadOf = ${officialOrigin}\n` +
       '[http]\n\tproxy = http://127.0.0.1:1\n',
   );
+
   return {
     GIT_CONFIG_GLOBAL: gitConfig,
     GIT_CONFIG_NOSYSTEM: '1',
@@ -197,6 +202,7 @@ function legacyCheckout(t) {
   t.after(() => fs.rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const repository = path.join(base, 'checkout');
   copyInstaller(repository);
+
   fs.writeFileSync(
     path.join(repository, 'package.json'),
     JSON.stringify(
@@ -210,6 +216,7 @@ function legacyCheckout(t) {
       2,
     ) + '\n',
   );
+
   git(repository, ['init']);
   git(repository, ['add', '.']);
   git(repository, ['commit', '-m', '0.4.0']);
@@ -220,6 +227,7 @@ function legacyCheckout(t) {
     path.join(repository, 'package.json'),
     JSON.stringify(bridgePackage('0.5.0'), null, 2) + '\n',
   );
+
   git(repository, ['add', '.']);
   git(repository, ['commit', '-m', '0.5.0']);
   git(repository, ['tag', 'v0.5.0']);
@@ -232,6 +240,7 @@ function legacyCheckout(t) {
     `[url "${pathToFileURL(path.join(repository, '.git')).href}"]\n\tinsteadOf = ${officialOrigin}\n` +
       '[http]\n\tproxy = http://127.0.0.1:1\n',
   );
+
   const home = path.join(base, 'home');
   fs.mkdirSync(home, { recursive: true });
   return { base, repository, home, gitConfig };
@@ -253,6 +262,7 @@ test('installer and cleanup scripts are ASCII-only where required and use LF end
     const nonAscii = bytes.findIndex((byte) => byte > 0x7f);
     assert.equal(nonAscii, -1, `${path.basename(file)} has a non-ASCII byte at offset ${nonAscii}`);
   }
+
   for (const file of [shInstaller, path.join(repoRoot, 'cleanup.sh')]) {
     const bytes = fs.readFileSync(file);
     assert.equal(bytes.indexOf(0x0d), -1, `${path.basename(file)} must use LF line endings`);
@@ -269,6 +279,7 @@ test('installer.sh and cleanup.sh pass bash -n', (t) => {
     t.skip('Windows has no supported bash in this test suite');
     return;
   }
+
   for (const file of [shInstaller, path.join(repoRoot, 'cleanup.sh')]) {
     const result = spawnSync('bash', ['-n', file], { encoding: 'utf8' });
     if (result.error) {
@@ -284,6 +295,7 @@ test('both installers show the same usage lines and no removed options', (t) => 
     usageBlock(fs.readFileSync(psInstaller, 'utf8')),
     usageBlock(fs.readFileSync(shInstaller, 'utf8')),
   );
+
   for (const file of [psInstaller, shInstaller]) {
     const text = fs.readFileSync(file, 'utf8');
     for (const line of [
@@ -320,6 +332,7 @@ test('positional parsing rejects unknown commands, targets and non-absolute skil
     [['uninstall', 'claude', 'extra'], /Unexpected argument/],
     [['--help', 'extra'], /Help takes no arguments/],
   ];
+
   for (const [args, pattern] of cases) {
     const result = runInstaller(home, args);
     assert.notEqual(result.status, 0, `${args.join(' ')} must fail`);
@@ -330,10 +343,12 @@ test('positional parsing rejects unknown commands, targets and non-absolute skil
 test('default install upgrades or resyncs a found Git install', (t) => {
   const { repository, home } = releaseCheckout(t);
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+
   const result = runScript(home, path.join(repository, installerName), [], {
     cwd: repository,
     extraEnv: { DPSK_INSTALLER_UPGRADE_TAG: currentTag },
   });
+
   assert.equal(result.status, 0, output(result));
   assert.match(result.stdout, /Found an existing install; upgrading or resyncing/);
   assert.match(result.stdout, /Already on/);
@@ -349,13 +364,16 @@ test('default install clones the latest release when no install is found', (t) =
   fs.mkdirSync(download, { recursive: true });
   const script = path.join(download, installerName);
   fs.copyFileSync(installerPath, script);
+
   const result = runScript(home, script, [], {
     cwd: download,
     extraEnv: cloneEnvironment(base, repository, { DPSK_INSTALLER_UPGRADE_TAG: currentTag }),
   });
+
   assert.equal(result.status, 0, output(result));
   assert.match(result.stdout, /No install found; cloning the latest release/);
   assert.match(result.stdout, /Cloning dpsk-bridge/);
+
   const checkout = path.join(home, '.dpsk-bridge', 'app');
   assert.ok(
     fs.existsSync(path.join(checkout, 'scripts', 'installer-core.mjs')),
@@ -368,6 +386,7 @@ test('default install clones the latest release when no install is found', (t) =
 test('install other <dir> installs into the custom directory', (t) => {
   const { repository, home } = releaseCheckout(t);
   const destination = path.join(home, 'custom host', 'skills');
+
   const result = runScript(
     home,
     path.join(repository, installerName),
@@ -377,11 +396,13 @@ test('install other <dir> installs into the custom directory', (t) => {
       extraEnv: { DPSK_INSTALLER_UPGRADE_TAG: currentTag },
     },
   );
+
   assert.equal(result.status, 0, output(result));
   assertSkills(destination, true);
   const key = legacyGenericKey(destination);
   const state = path.join(home, '.dpsk-bridge');
   assert.ok(fs.existsSync(path.join(state, `installed-skills-generic-${key}.txt`)));
+
   assert.equal(
     readJson(path.join(state, `installed-skills-generic-${key}.host.json`)).target,
     'other',
@@ -421,14 +442,17 @@ test('uninstall removes one target, then everything, and keeps the checkout', (t
 test('installer refuses a found non-Git install and points at the cleanup script', (t) => {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-unpacked-'));
   t.after(() => fs.rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+
   const unpacked = path.join(base, 'unpacked');
   copyBridge(unpacked);
   fs.writeFileSync(
     path.join(unpacked, 'package.json'),
     JSON.stringify(bridgePackage(packageJson.version), null, 2) + '\n',
   );
+
   const home = path.join(base, 'home');
   fs.mkdirSync(home, { recursive: true });
+
   for (const args of [[], ['uninstall']]) {
     const result = runScript(home, path.join(unpacked, installerName), args, { cwd: unpacked });
     assert.equal(result.status, 1, output(result));
@@ -463,9 +487,11 @@ test('default install recognizes a pre-0.6 Generic record and manifest', (t) => 
     readJson(path.join(state, `installed-skills-generic-${key}.host.json`)).target,
     'other',
   );
+
   const manifests = fs
     .readdirSync(state)
     .filter((name) => /^installed-skills-generic-[A-F0-9]{16}\.txt$/.test(name));
+
   assert.deepEqual(
     manifests,
     [`installed-skills-generic-${key}.txt`],
@@ -484,6 +510,7 @@ test('default install recognizes a pre-0.6 Generic record and manifest', (t) => 
 
 test('install upgrades a pre-core checkout in place before running the core', (t) => {
   const { repository, home, gitConfig } = legacyCheckout(t);
+
   const result = runScript(home, path.join(repository, installerName), ['install', 'claude'], {
     cwd: repository,
     extraEnv: {
@@ -506,6 +533,7 @@ test('installer.sh works when piped through bash -s with positional arguments', 
     t.skip('piped bash is only tested on Linux and macOS');
     return;
   }
+
   const { repository, home } = releaseCheckout(t);
   const state = path.join(home, '.dpsk-bridge');
   fs.mkdirSync(state, { recursive: true });
@@ -517,6 +545,7 @@ test('installer.sh works when piped through bash -s with positional arguments', 
       installedAt: new Date().toISOString(),
     }),
   );
+
   const result = spawnSync('bash', ['-s', '--', 'install', 'claude'], {
     cwd: home,
     env: environment(home, { DPSK_INSTALLER_UPGRADE_TAG: currentTag }),

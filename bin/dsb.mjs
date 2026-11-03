@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
+
 import {
   runJob,
   readJob,
@@ -23,6 +24,7 @@ const helpColumns = () =>
   process.stdout.isTTY && Number.isInteger(process.stdout.columns) && process.stdout.columns > 0
     ? process.stdout.columns
     : 100;
+
 try {
   const plan = parse(process.argv.slice(2));
   if (plan.action === 'help') {

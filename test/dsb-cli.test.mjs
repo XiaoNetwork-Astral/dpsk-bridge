@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+
 import { COMMANDS, parse, parseCommand, rootHelp, commandHelp } from '../lib/cli.mjs';
 
 const dsbBin = fileURLToPath(new URL('../bin/dsb.mjs', import.meta.url));
@@ -223,6 +224,7 @@ test('every documented short alias maps to its long option', () => {
       expected: true,
     },
   ];
+
   for (const item of cases) {
     const args = [...item.prefix];
     if (item.value === undefined) args.push(item.alias);
@@ -242,6 +244,7 @@ test('each short alias letter has exactly one meaning across all commands', () =
         assert.equal(known, option.long, `${option.short} means both ${known} and ${option.long}`);
       else meanings.set(option.short, option.long);
     }
+
   assert.deepEqual(Object.fromEntries([...meanings].sort()), {
     '-C': '--cwd',
     '-a': '--answer',
@@ -269,6 +272,7 @@ test('every value option also accepts --name=value', () => {
     '--dsh-entry=/opt/dsh/lib/bin.js',
     '--resource=editor',
   ]);
+
   assert.equal(run.options.brief, 'brief.md');
   assert.equal(run.options.cwd, 'project');
   assert.equal(run.options.timeout, '600');
@@ -293,6 +297,7 @@ test('every value option also accepts --name=value', () => {
     parseCommand('run', ['--brief=brief.md', '--patch=a.yml', '--patch=b.yml']).options.patch,
     ['a.yml', 'b.yml'],
   );
+
   // Only the first '=' separates the name from the value.
   assert.equal(
     parseCommand('review', [ID, '--verdict=accepted', '--note=a=b']).options.note,
@@ -303,6 +308,7 @@ test('every value option also accepts --name=value', () => {
 
 test('renamed and removed options name their replacement', () => {
   const run = ['--brief', 'brief.md'];
+
   assert.throws(
     () => parseCommand('run', [...run, '--timeout', '5']),
     /Unknown option: --timeout\. 'dsb run' now uses --time-limit <SECONDS>/,
@@ -333,11 +339,13 @@ test('renamed and removed options name their replacement', () => {
     () => parseCommand('unlock', [ID, '--confirmed-stopped']),
     /Unknown option: --confirmed-stopped\. 'dsb unlock' now uses --confirm-stopped/,
   );
+
   // A hint only applies in the command that used to accept the option.
   assert.throws(
     () => parseCommand('send', [ID, '--timeout', '5']),
     /Unknown option: --timeout\. Run/,
   );
+
   // Names that kept their meaning keep working.
   assert.equal(parseCommand('wait', [ID, '--timeout', '5']).options.timeout, '5');
 });
@@ -359,6 +367,7 @@ test('repeatable options accumulate in order', () => {
     'i1',
     '--image=i2',
   ]);
+
   assert.deepEqual(parsed.options.patch, ['a', 'b']);
   assert.deepEqual(parsed.options.scope, ['s1', 's2']);
   assert.deepEqual(parsed.options.resource, ['r1', 'r2']);
@@ -379,6 +388,7 @@ test('unknown options, missing values, duplicates, and extra arguments are rejec
     () => parseCommand('run', ['--brief', '--cwd', 'project']),
     /Missing value for --brief/,
   );
+
   assert.throws(
     () => parseCommand('run', ['--brief', 'one.md', '--brief', 'two.md']),
     /Duplicate option: --brief/,
@@ -395,6 +405,7 @@ test('unknown options, missing values, duplicates, and extra arguments are rejec
     () => parseCommand('run', ['--brief', 'brief.md', '--read-only=true']),
     /--read-only does not take a value/,
   );
+
   assert.throws(
     () => parseCommand('run', ['--brief', 'brief.md', 'extra']),
     /Unexpected argument: extra/,
@@ -433,6 +444,7 @@ test('ID-taking commands reject a missing ID at parse time', () => {
     review: ['--verdict', 'accepted', '--note', 'evidence'],
     unlock: ['--confirm-stopped'],
   };
+
   for (const [name, args] of Object.entries(cases))
     assert.throws(
       () => parseCommand(name, args),
@@ -464,6 +476,7 @@ test('top-level and command help contain every command and option', () => {
   assert.doesNotMatch(root, /^Notes:$/m);
   assert.match(root, /-h, --help/);
   assert.match(root, /-V, --version/);
+
   for (const item of COMMANDS) {
     assert.match(root, new RegExp(`^  ${item.name}\\s+`, 'm'), item.name);
     assert.ok(root.includes(item.summary), item.name);
@@ -491,6 +504,7 @@ test('top-level and command help contain every command and option', () => {
     }
     if (item.positionals.length) assert.match(help, /^Arguments:$/m, item.name);
   }
+
   assert.throws(() => commandHelp('bogus'), /Unknown command: bogus/);
 });
 
@@ -504,6 +518,7 @@ test('help uses the documented aliases, value names, and has no notify option', 
   assert.match(run, /--time-limit <SECONDS>/);
   assert.match(run, /--concurrency <N>/);
   assert.doesNotMatch(run, /notify/i);
+
   assert.match(commandHelp('wait'), /-t, --timeout <SECONDS>/);
   assert.match(commandHelp('send'), /-m, --message <FILE>/);
   assert.match(commandHelp('answer'), /-r, --request <REQUEST_ID>/);
@@ -525,14 +540,17 @@ test('help has no Notes section and keeps essentials in option descriptions', ()
   assert.match(root, /DPSK_PROVIDER Default model route \(default: deepseek-official\)/);
   assert.match(root, /DPSK_MODEL Default model name \(default: deepseek-flash\)/);
   assert.match(root, /DPSK_CONCURRENCY .*default: 8/);
+
   const wait = flat(commandHelp('wait'));
   assert.match(wait, /finishes, needs an answer, or times out/);
   assert.match(wait, /1\.\.3600/);
   assert.match(wait, /default: 600/);
+
   const review = flat(commandHelp('review'));
   assert.ok(review.includes('{"currency":"CNY","source":"...","deepseekCost":0.12}'));
   assert.match(review, /every key ending in Cost is recorded, omit unknown costs/);
   assert.match(flat(commandHelp('events')), /Byte cursor from a previous events response/);
+
   const run = flat(commandHelp('run'));
   assert.match(run, /Cooperative write scope, not a sandbox/);
   assert.match(run, /--dsh-entry <FILE>/);
@@ -547,13 +565,16 @@ test('guard-rail flags parse and appear in help', () => {
       .userOk,
     true,
   );
+
   const retry = parseCommand('retry', [ID, '--feedback', 'feedback.md', '--resume', '--user-ok']);
   assert.equal(retry.options.resume, true);
   assert.equal(retry.options.userOk, true);
+
   assert.equal(
     parseCommand('run', ['--brief', 'brief.md', '--context-limit', '5000']).options.contextLimit,
     '5000',
   );
+
   const flat = (text) => text.replace(/\s+/g, ' ');
   assert.match(flat(commandHelp('answer')), /--user-ok.*3-question job cap/);
   assert.match(flat(commandHelp('retry')), /--resume.*timeout or unanswered question/);
@@ -610,6 +631,7 @@ async function runCli(t, report) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-dsb-cli-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
+
   const entry = path.join(root, 'runtime', 'lib', 'bin.mjs');
   fs.writeFileSync(entry, cliRuntime(report));
   fs.writeFileSync(
@@ -618,6 +640,7 @@ async function runCli(t, report) {
   );
   const brief = path.join(root, 'brief.md');
   fs.writeFileSync(brief, 'cli exit code');
+
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
@@ -627,14 +650,17 @@ async function runCli(t, report) {
         windowsHide: true,
       },
     );
+
     let stdout = '',
       stderr = '';
+
     child.stdout.on('data', (data) => {
       stdout += data;
     });
     child.stderr.on('data', (data) => {
       stderr += data;
     });
+
     child.once('error', reject);
     child.once('close', (code) => resolve({ code, stdout, stderr }));
   });

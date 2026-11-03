@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+
 import { flushInput, parseInput, runSnapshot } from '../lib/viewer/app.mjs';
 import { show, watch } from '../lib/viewer/cli.mjs';
 import { createSessionStore } from '../lib/viewer/store.mjs';
@@ -12,17 +13,20 @@ import { createEventReader, listSessionFiles } from '../lib/sessions.mjs';
 
 const cli = fileURLToPath(new URL('../bin/dsv.mjs', import.meta.url));
 const plain = (text) => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+
 // Injected into the TUI child process: a tiny virtual terminal that applies the
 // row-addressed writes of the screen differ, so tests read what the user sees.
 const VT = String.raw`const screen=[];const apply=s=>{s=String(s);if(s.includes('\x1b[2J'))screen.length=0;
 const p=s.split(/\x1b\[(\d+);1H/);for(let i=1;i<p.length;i+=2)screen[p[i]-1]=p[i+1].replace(/\x1b\[0J[\s\S]*$/,'');
 const m=/\x1b\[(\d+);1H\x1b\[0J/.exec(s);if(m)screen.length=m[1]-1;return p.length>1;};
 const view=()=>Array.from(screen,l=>l??'').join('\r\n');`;
+
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsv-reading-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   let seq = 0;
   const event = (type, data) => ({ type, seq: ++seq, time: 1700000000000 + seq, data });
+
   const events = [
     { type: 'session', version: 4, id: 'reading', cwd: '/work/bridge', createdAt: 1700000000000 },
     event('session/title', { title: '优化会话查看器' }),
@@ -37,6 +41,7 @@ function fixture(t) {
       ],
     }),
   ];
+
   for (let i = 0; i < 80; i++) {
     events.push(
       event('tool/call', {
@@ -59,6 +64,7 @@ function fixture(t) {
       }),
     );
   }
+
   events.push(
     event('assistant/message', {
       turn: 1,
@@ -75,12 +81,14 @@ function fixture(t) {
     }),
     event('turn/end', { turn: 1, reason: { kind: 'completed' } }),
   );
+
   const dir = path.join(root, 'project', 'reading');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, 'session.v4.jsonl'),
     events.map(JSON.stringify).join('\n') + '\n',
   );
+
   return root;
 }
 
@@ -91,6 +99,7 @@ function writeSimpleSession(
 ) {
   const directory = path.join(root, 'project', id);
   fs.mkdirSync(directory, { recursive: true });
+
   const rows = [
     { type: 'session', version: 4, id, cwd: `/work/${id}`, createdAt: mtime - 1000 },
     { type: 'session/title', seq: 1, time: mtime - 1000, data: { title } },
@@ -108,9 +117,11 @@ function writeSimpleSession(
       data: { turn: 1, reason: { kind: 'completed' } },
     },
   ];
+
   const file = path.join(directory, 'session.v4.jsonl');
   fs.writeFileSync(file, rows.map(JSON.stringify).join('\n') + '\n');
   fs.utimesSync(file, new Date(mtime), new Date(mtime));
+
   return file;
 }
 
@@ -136,6 +147,7 @@ test('default CLI shows the answer before a single process summary and hides tec
       encoding: 'utf8',
       env: { ...process.env, DSH_SESSIONS_ROOT: root },
     });
+
   const compact = run([]);
   assert.equal(compact.status, 0, compact.stderr);
   assert.match(compact.stdout, /已完成阅读界面调整/);
@@ -150,9 +162,11 @@ test('default CLI shows the answer before a single process summary and hides tec
     assert.ok(!compact.stdout.includes(hidden), hidden);
   assert.ok(compact.stdout.indexOf('已完成阅读界面调整') < compact.stdout.indexOf('减少阅读负担'));
   assert.ok(compact.stdout.split('\n').length < 25);
+
   const processView = run(['--details']);
   assert.equal(processView.status, 0, processView.stderr);
   assert.match(processView.stdout, /src\/file-0.mjs/);
+
   const full = run(['--full', '--reasoning']);
   assert.equal(full.status, 0, full.stderr);
   assert.match(full.stdout, /SUCCESS_TOOL_DUMP/);
@@ -162,11 +176,13 @@ test('default CLI shows the answer before a single process summary and hides tec
 test('long answers and full tool output remain complete and terminal controls are removed', (t) => {
   const root = fixture(t),
     file = path.join(root, 'project', 'reading', 'session.v4.jsonl');
+
   const events = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
   const control = '\x1b]0;HOSTILE_TITLE\x07\x1b[2J';
   events[0].cwd = '/work/' + control + 'bridge';
   events[1].data.title = control + '任务';
   const long = Array.from({ length: 2105 }, (_, i) => `line-${i}`).join('\n');
+
   events.find((e) => e.type === 'assistant/message').data.message.content = [
     { type: 'text', text: control + long },
   ];
@@ -177,6 +193,7 @@ test('long answers and full tool output remain complete and terminal controls ar
     command: control + 'safe-command',
   });
   fs.writeFileSync(file, events.map(JSON.stringify).join('\n') + '\n');
+
   for (const flags of [[], ['--full'], ['--all']]) {
     const result = spawnSync(process.execPath, [cli, 'show', 'reading', ...flags], {
       encoding: 'utf8',
@@ -203,12 +220,14 @@ process.stdin.setRawMode=()=>{};process.stdout.write=s=>{apply(s);return true;};
 process.argv=['node',${JSON.stringify(cli)},'--no-update-check'];await import(${JSON.stringify(pathToFileURL(cli).href)});
 snaps.push(view());for(const k of ['\\r','d','?','?']){process.stdin.emit('data',Buffer.from(k));snaps.push(view());}
 stdout(JSON.stringify(snaps));process.exit(0);`;
+
     const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
       encoding: 'utf8',
       env: { ...process.env, DSH_SESSIONS_ROOT: root },
       timeout: 15000,
     });
     assert.equal(output.status, 0, output.stderr);
+
     // Snapshots: start (list focused), Enter (reading view), d (process view), ? (help), ? (help closed).
     const [start, reading, processView, help, closed] = JSON.parse(output.stdout).map(plain);
     assert.match(start, /优化会话查看器/);
@@ -227,6 +246,7 @@ stdout(JSON.stringify(snaps));process.exit(0);`;
 
 test('new sessions do not steal the current reading position and explicit navigation still switches', (t) => {
   const root = fixture(t);
+
   const script = `
 import fs from 'node:fs';import path from 'node:path';
 ${VT}
@@ -245,12 +265,14 @@ fs.writeFileSync(path.join(dir,'session.v4.jsonl'),rows.map(JSON.stringify).join
 fs.utimesSync(path.join(dir,'session.v4.jsonl'),new Date(),new Date(Date.now()+2000));
 timers.find(t=>t.ms===1000).callback();
 process.stdin.emit('data',Buffer.from('gjj'));stdout(JSON.stringify(frames));process.exit(0);`;
+
   const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     encoding: 'utf8',
     env: { ...process.env, DSH_SESSIONS_ROOT: root },
     timeout: 15000,
   });
   assert.equal(output.status, 0, output.stderr);
+
   const frames = JSON.parse(output.stdout).map(plain);
   assert.match(frames[1], /新到达的会话/);
   assert.match(frames[1], /已完成阅读界面调整/);
@@ -263,6 +285,7 @@ test('groups fold with keyboard and mouse, retain reading state, and stay folded
     now = new Date(2026, 0, 15, 12).getTime();
   const reading = path.join(root, 'project', 'reading', 'session.v4.jsonl');
   fs.utimesSync(reading, new Date(now), new Date(now));
+
   for (const [id, days] of [
     ['today-other', 0],
     ['yesterday', 1],
@@ -271,6 +294,7 @@ test('groups fold with keyboard and mouse, retain reading state, and stay folded
   ]) {
     const dir = path.join(root, 'project', id);
     fs.mkdirSync(dir, { recursive: true });
+
     const events = [
       { type: 'session', version: 4, id, cwd: '/work/' + id, createdAt: now },
       { type: 'session/title', seq: 1, data: { title: 'TASK_' + id } },
@@ -282,10 +306,12 @@ test('groups fold with keyboard and mouse, retain reading state, and stay folded
       },
       { type: 'turn/end', seq: 4, data: { turn: 1, reason: { kind: 'completed' } } },
     ];
+
     const file = path.join(dir, 'session.v4.jsonl');
     fs.writeFileSync(file, events.map(JSON.stringify).join('\n') + '\n');
     fs.utimesSync(file, new Date(now), new Date(now - days * 86400000 - 60000));
   }
+
   for (const columns of [128, 80]) {
     const script = `
 ${VT}
@@ -303,22 +329,27 @@ key('\\x1b[D');frames.leftFold=current;key('\\x1b[C');frames.rightOpen=current;
 key('jj ');frames.weekOpen=current;
 key('\\x1b[<0;4;3M');frames.mouseOpen=current;key('\\x1b[<0;4;3M');frames.mouseFold=current;
 stdout(JSON.stringify(frames));process.exit(0);`;
+
     const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
       encoding: 'utf8',
       env: { ...process.env, DSH_SESSIONS_ROOT: root },
       timeout: 15000,
     });
     assert.equal(output.status, 0, output.stderr);
+
     const frames = Object.fromEntries(
       Object.entries(JSON.parse(output.stdout)).map(([key, value]) => [key, plain(value)]),
     );
+
     const sidebar = (frame) =>
       frame
         .split('\r\n')
         .slice(1, -1)
         .map((line) => (columns >= 100 ? (line.split('│')[1] ?? '') : line))
         .join('\n');
+
     const initial = sidebar(frames.initial);
+
     // Both sessions ended within the last minutes, so they are still under 运行中 › 刚结束.
     assert.match(initial, /▾ Running/);
     assert.match(initial, /▾ Just ended/);
@@ -328,12 +359,14 @@ stdout(JSON.stringify(frames));process.exit(0);`;
     assert.match(initial, /▸ 2026-1-3 /);
     assert.match(initial, /TASK_yesterday/, 'the newest day is open');
     assert.ok(!initial.includes('TASK_week'));
+
     assert.match(sidebar(frames.folded), /▸ Running/);
     assert.ok(!sidebar(frames.folded).includes('优化会话查看器'));
     assert.match(sidebar(frames.refreshed), /▸ Running/);
     if (columns >= 100) assert.match(frames.folded, /已完成阅读界面调整/);
     if (columns >= 100) assert.match(frames.readingYesterday, /ANSWER_yesterday/);
     else assert.match(sidebar(frames.readingYesterday), /▌ +✓ TASK_yesterday/);
+
     assert.match(sidebar(frames.leftFold), /▸ 2026-1-14 /);
     assert.ok(!sidebar(frames.leftFold).includes('TASK_yesterday'));
     assert.match(sidebar(frames.rightOpen), /TASK_yesterday/);
@@ -347,6 +380,7 @@ stdout(JSON.stringify(frames));process.exit(0);`;
 
 test('mouse wheel scrolls the transcript without moving the highlighted block', (t) => {
   const root = fixture(t);
+
   const script = `
 ${VT}
 const frames={},timers=[];let current='';const stdout=process.stdout.write.bind(process.stdout);
@@ -360,15 +394,18 @@ key('\\tdjj');frames.cursor=current;
 for(let i=0;i<4;i++)key('\\x1b[<65;80;10M');frames.wheeled=current;
 key('j');frames.resumed=current;
 stdout(JSON.stringify(frames));process.exit(0);`;
+
   const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     encoding: 'utf8',
     env: { ...process.env, DSH_SESSIONS_ROOT: root },
     timeout: 15000,
   });
   assert.equal(output.status, 0, output.stderr);
+
   const frames = Object.fromEntries(
     Object.entries(JSON.parse(output.stdout)).map(([key, value]) => [key, plain(value)]),
   );
+
   // Detail rows carry the highlight bar right after the detail box's left border.
   const highlighted = (frame) =>
     frame
@@ -376,18 +413,21 @@ stdout(JSON.stringify(frames));process.exit(0);`;
       .slice(2, -2)
       .map((line, index) => [index, line])
       .filter(([, line]) => line.indexOf('│▌', 1) > 0);
+
   const before = highlighted(frames.cursor);
   assert.ok(
     before.length > 0 && before[0][0] > 0,
     'the cursor starts below the first transcript row',
   );
   assert.notEqual(frames.wheeled, frames.cursor, 'the wheel scrolled the transcript');
+
   // Old behavior moved the highlight to the first visible block; now it stays on its block, now off screen.
   assert.deepEqual(
     highlighted(frames.wheeled),
     [],
     'the highlighted block scrolled away instead of jumping',
   );
+
   const resumed = highlighted(frames.resumed);
   assert.ok(
     resumed.length > 0 && resumed[0][0] === 0,
@@ -403,6 +443,7 @@ test('keyboard covers group folding, jumping to running sessions, free scrolling
     new Date(now),
     new Date(now - 3 * 86400000),
   );
+
   // Two running sessions (open turn, fresh) and one finished yesterday.
   for (const [id, open, days] of [
     ['run-a', true, 0],
@@ -411,6 +452,7 @@ test('keyboard covers group folding, jumping to running sessions, free scrolling
   ]) {
     const dir = path.join(root, 'project', id);
     fs.mkdirSync(dir, { recursive: true });
+
     const events = [
       { type: 'session', version: 4, id, cwd: '/work/' + id, createdAt: now },
       { type: 'session/title', seq: 1, data: { title: 'TASK_' + id } },
@@ -424,6 +466,7 @@ test('keyboard covers group folding, jumping to running sessions, free scrolling
         ? []
         : [{ type: 'turn/end', seq: 4, data: { turn: 1, reason: { kind: 'completed' } } }]),
     ];
+
     const file = path.join(dir, 'session.v4.jsonl');
     fs.writeFileSync(file, events.map(JSON.stringify).join('\n') + '\n');
     fs.utimesSync(
@@ -432,6 +475,7 @@ test('keyboard covers group folding, jumping to running sessions, free scrolling
       new Date(now - days * 86400000 - (id === 'run-b' ? 1000 : 0)),
     );
   }
+
   const script = `
 ${VT}
 const frames={},timers=[];let current='';const stdout=process.stdout.write.bind(process.stdout);Date.now=()=>${now};
@@ -448,12 +492,14 @@ const closeDeadline=Date.now()+2000;
 while(current.includes('Help  ? to close')){if(Date.now()>closeDeadline)throw new Error('help did not close');await new Promise(resolve=>setTimeout(resolve,10));}
 frames.helpClosed=current;
 stdout(JSON.stringify(frames));process.exit(0);`;
+
   const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     encoding: 'utf8',
     env: { ...process.env, DSH_SESSIONS_ROOT: root },
     timeout: 15000,
   });
   assert.equal(output.status, 0, output.stderr);
+
   const frames = Object.fromEntries(
     Object.entries(JSON.parse(output.stdout)).map(([key, value]) => [key, plain(value)]),
   );
@@ -463,18 +509,21 @@ stdout(JSON.stringify(frames));process.exit(0);`;
       .slice(1, -1)
       .map((line) => line.split('│')[1] ?? '')
       .join('\n');
+
   assert.match(sidebar(frames.initial), /▸ 2026-1-12 /, 'older days start folded');
   assert.match(sidebar(frames.folded), /▸ Running/);
   assert.match(sidebar(frames.folded), /▸ Finished/);
   assert.ok(!sidebar(frames.folded).includes('TASK_'), 'z folds every group');
   for (const label of [/▾ Running/, /▾ Finished/, /▾ 2026-1-14 /, /▾ 2026-1-12 /])
     assert.match(sidebar(frames.opened), label);
+
   // n cycles through the running sessions and shows each transcript.
   const title = (frame) => frame.split('\r\n')[1];
   const firstRun = /TASK_run-(a|b)/.exec(title(frames.next1))?.[1];
   assert.ok(firstRun, title(frames.next1));
   assert.match(title(frames.next2), new RegExp('TASK_run-' + (firstRun === 'a' ? 'b' : 'a')));
   assert.match(title(frames.next3), new RegExp('TASK_run-' + firstRun));
+
   // Help is modal: a click on the list underneath changes nothing.
   assert.match(frames.help, /Help  \? to close/);
   assert.equal(frames.helpClick, frames.help);
@@ -483,6 +532,7 @@ stdout(JSON.stringify(frames));process.exit(0);`;
 
 test('Ctrl+D scrolls the transcript like the wheel while PgDn moves the highlight along', (t) => {
   const root = fixture(t);
+
   const script = `
 ${VT}
 const frames={},timers=[];let current='';const stdout=process.stdout.write.bind(process.stdout);
@@ -495,20 +545,24 @@ const key=s=>process.stdin.emit('data',Buffer.from(s));
 key('\\tdjj');frames.cursor=current;key('\\x04\\x04');frames.ctrlD=current;
 key('gjj');key('\\x1b[6~');frames.pageDown=current;
 stdout(JSON.stringify(frames));process.exit(0);`;
+
   const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     encoding: 'utf8',
     env: { ...process.env, DSH_SESSIONS_ROOT: root },
     timeout: 15000,
   });
   assert.equal(output.status, 0, output.stderr);
+
   const frames = Object.fromEntries(
     Object.entries(JSON.parse(output.stdout)).map(([key, value]) => [key, plain(value)]),
   );
+
   const highlighted = (frame) =>
     frame
       .split('\r\n')
       .slice(2, -2)
       .filter((line) => line.indexOf('│▌', 1) > 0);
+
   assert.ok(highlighted(frames.cursor).length > 0);
   assert.notEqual(frames.ctrlD, frames.cursor, 'Ctrl+D scrolled');
   assert.deepEqual(
@@ -521,6 +575,7 @@ stdout(JSON.stringify(frames));process.exit(0);`;
 
 test('the transcript follows output appended after the wheel or j reaches the bottom until a wheel-up parks it', (t) => {
   const root = fixture(t);
+
   // Appended records use the same assistant/message shape as the fixture. Each
   // one adds a single process-view line after the transcript's current end.
   const script = `
@@ -554,17 +609,22 @@ key('gG');frames.goBottom=current;
 append('FOLLOW_G_ONE appended after G');
 tick();frames.goBottomFollow=current;
 stdout(JSON.stringify(frames));process.exit(0);`;
+
   const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
     encoding: 'utf8',
     env: { ...process.env, DSH_SESSIONS_ROOT: root },
     timeout: 15000,
   });
+
   assert.equal(output.status, 0, output.stderr);
+
   const frames = Object.fromEntries(
     Object.entries(JSON.parse(output.stdout)).map(([key, value]) => [key, plain(value)]),
   );
+
   // Content rows of the detail box, without the top/bottom borders or footer.
   const detailRows = (frame) => frame.split('\r\n').slice(2, -2);
+
   // The pane's right edge carries a scroll thumb that moves as the log grows.
   const detailBody = (frame) => detailRows(frame).map((line) => line.slice(0, -1));
 
@@ -648,6 +708,7 @@ test('merged plan calls keep the header and reading overview tool-call counts eq
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   let seq = 0;
   const event = (type, data) => ({ type, seq: ++seq, time: 1700000000000 + seq, data });
+
   const rows = [
     { type: 'session', version: 4, id: 'plan-count', cwd: '/work/plan', createdAt: 1700000000000 },
     event('session/title', { title: 'PLAN_COUNT_TASK' }),
@@ -707,25 +768,30 @@ test('merged plan calls keep the header and reading overview tool-call counts eq
       reason: { kind: 'error', error: { message: 'provider failure' } },
     }),
   ];
+
   const directory = path.join(root, 'project', 'plan-count');
   fs.mkdirSync(directory, { recursive: true });
   fs.writeFileSync(
     path.join(directory, 'session.v4.jsonl'),
     rows.map(JSON.stringify).join('\n') + '\n',
   );
+
   const lines = [];
   t.mock.method(console, 'log', (...args) => lines.push(args.join(' ')));
+
   const run = (flags) => {
     lines.length = 0;
     show('plan-count', flags, { root });
     return lines.join('\n');
   };
+
   const full = run({ full: true }),
     reading = run({});
   const headerCount = Number(/(\d+) tool call/.exec(full)?.[1]);
   const overviewCount = Number(/(\d+) tool call/.exec(reading)?.[1]);
   assert.equal(headerCount, 3, 'two plan calls plus one failed tool call');
   assert.equal(overviewCount, headerCount);
+
   assert.match(reading, /\(2 plan updates shown as one note\)/);
   assert.match(full, /✗ Failed/);
 });
@@ -736,6 +802,7 @@ test('show reports a read error as one line instead of throwing', (t) => {
   t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
   t.mock.method(console, 'log', () => {});
   const previous = process.exitCode;
+
   try {
     show(
       'latest',
@@ -750,6 +817,7 @@ test('show reports a read error as one line instead of throwing', (t) => {
   } finally {
     process.exitCode = previous;
   }
+
   assert.deepEqual(errors, ['Could not read the log: EPERM: locked']);
 });
 
@@ -763,11 +831,13 @@ test('error and aborted turn reasons show Failed and Aborted in ls and show', (t
     { title: 'FAILED_TASK' },
   );
   writeReasonSession(root, 'aborted', { kind: 'aborted' }, { title: 'ABORTED_TASK' });
+
   const env = { ...process.env, DSH_SESSIONS_ROOT: root };
   const ls = spawnSync(process.execPath, [cli, 'ls'], { encoding: 'utf8', env });
   assert.equal(ls.status, 0, ls.stderr);
   assert.match(ls.stdout, /✗ Failed/);
   assert.match(ls.stdout, /✗ Aborted/);
+
   for (const [id, label] of [
     ['failed', 'Failed'],
     ['aborted', 'Aborted'],
@@ -783,6 +853,7 @@ test('dsv ls hides empty sessions like the TUI', (t) => {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'project', 'empty', 'session.v4.jsonl');
   fs.mkdirSync(path.dirname(file), { recursive: true });
+
   fs.writeFileSync(
     file,
     JSON.stringify({
@@ -793,6 +864,7 @@ test('dsv ls hides empty sessions like the TUI', (t) => {
       createdAt: Date.now(),
     }) + '\n',
   );
+
   const result = spawnSync(process.execPath, [cli, 'ls'], {
     encoding: 'utf8',
     env: { ...process.env, DSH_SESSIONS_ROOT: root },
@@ -804,11 +876,13 @@ test('dsv ls hides empty sessions like the TUI', (t) => {
 test('watch reports a first read failure, keeps polling, and prints an appended event', (t) => {
   const root = fixture(t),
     file = path.join(root, 'project', 'reading', 'session.v4.jsonl');
+
   const real = createEventReader(file);
   let attempts = 0,
     tick;
   const logs = [],
     errors = [];
+
   watch('latest', {
     root,
     out: { log: (value) => logs.push(String(value)), error: (value) => errors.push(String(value)) },
@@ -827,9 +901,11 @@ test('watch reports a first read failure, keeps polling, and prints an appended 
       return 1;
     },
   });
+
   assert.deepEqual(errors, ['Could not read the log: EPERM: locked']);
   tick();
   assert.match(logs.join('\n'), /优化会话查看器/);
+
   fs.appendFileSync(
     file,
     JSON.stringify({
@@ -849,6 +925,7 @@ test('watch rescans the session tree on its scan interval, not on every tick', (
     tick,
     clock = 1000;
   const logs = [];
+
   watch('latest', {
     root,
     out: { log: (value) => logs.push(String(value)), error: () => {} },
@@ -863,10 +940,12 @@ test('watch rescans the session tree on its scan interval, not on every tick', (
       return 1;
     },
   });
+
   for (const at of [2000, 4000, 6000, 7000]) {
     clock = at;
     tick();
   }
+
   assert.equal(scans, 1);
   assert.match(logs.join('\n'), /优化会话查看器/);
 });
@@ -874,12 +953,15 @@ test('watch rescans the session tree on its scan interval, not on every tick', (
 test('runSnapshot paints one frame and loads only the visible list titles', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsv-snapshot-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
   const at = new Date(2026, 0, 15, 12).getTime();
   for (let index = 0; index < 40; index++)
     writeSimpleSession(root, `s${index}`, { mtime: at - index * 1000 });
+
   let store;
   const loads = [],
     chunks = [];
+
   const code = await runSnapshot({
     root,
     columns: 100,
@@ -897,6 +979,7 @@ test('runSnapshot paints one frame and loads only the visible list titles', asyn
       return store;
     },
   });
+
   assert.equal(code, 0);
   const frame = chunks.join('');
   assert.equal(frame.split('\n').slice(0, -1).length, 20);

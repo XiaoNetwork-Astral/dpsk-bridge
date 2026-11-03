@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+
 import { projectTranscript, relativePath } from '../lib/viewer-model.mjs';
 
 test('relative paths fold case only for Windows-style paths, so POSIX sibling directories are not mistaken for the project', () => {
@@ -14,10 +15,13 @@ test('relative paths fold case only for Windows-style paths, so POSIX sibling di
 const text = (value) => [{ type: 'text', text: value }];
 const event = (seq, type, data = {}) => ({ seq, type, time: 1000 + seq, data });
 const start = (seq, turn = 1) => event(seq, 'turn/start', { turn });
+
 const end = (seq, turn = 1, reason = { kind: 'completed' }) =>
   event(seq, 'turn/end', { turn, reason });
+
 const user = (seq, value, source = { kind: 'user' }) =>
   event(seq, 'user/message', { id: `user-${seq}`, role: 'user', source, content: text(value) });
+
 const assistant = (seq, value, turn = 1) =>
   event(seq, 'assistant/message', {
     turn,
@@ -25,8 +29,10 @@ const assistant = (seq, value, turn = 1) =>
     message: { id: `assistant-${seq}`, role: 'assistant', content: text(value) },
     stream: [],
   });
+
 const call = (seq, callId, name, args = {}, turn = 1) =>
   event(seq, 'tool/call', { turn, step: 1, callId, name, arguments: JSON.stringify(args) });
+
 const result = (seq, callId, value, isError = false, turn = 1) =>
   event(seq, 'tool/result', {
     turn,
@@ -46,16 +52,19 @@ test('parallel tools merge by call id despite out-of-order results and keep pend
     call(3, 'run-b', 'shell', { command: 'npm test\necho secret' }),
   ];
   const pending = projectTranscript(prefix);
+
   assert.deepEqual(
     pending.map((node) => node.key),
     ['tool:read-a:1:1', 'tool:run-b:1:1'],
   );
   assert.ok(pending.every((node) => node.state === 'pending'));
+
   const nodes = projectTranscript([
     ...prefix,
     result(4, 'run-b', 'b output'),
     result(5, 'read-a', 'a output'),
   ]);
+
   assert.equal(nodes.length, 2);
   assert.equal(nodes[0].key, pending[0].key);
   assert.match(nodes[0].text, /a output/);
@@ -98,15 +107,18 @@ test('failed tools surface brief errors while retaining full arguments, output, 
   const failed = result(3, 'bad', 'Permission denied\ncomplete error log\nmore detail', true);
   failed.data.error = { name: 'PermissionError', code: 'DENIED', reason: '缺少目录权限' };
   failed.data.meta = { path: '/repo/protected' };
+
   const [node] = projectTranscript([
     start(1),
     call(2, 'bad', 'write_file', { path: '/repo/protected', content: 'original value' }),
     failed,
   ]);
+
   assert.equal(node.kind, 'error');
   assert.equal(node.tone, 'error');
   assert.equal(node.state, 'error');
   assert.equal(node.summary, '缺少目录权限');
+
   for (const value of [
     'original value',
     'complete error log',
@@ -120,6 +132,7 @@ test('only the last nonempty assistant text before each turn end becomes a full 
   const progress = assistant(2, 'I am investigating.\n' + 'detail '.repeat(80));
   const answer = assistant(3, 'RESULT: OK\n完整结论\n' + '已验证。'.repeat(80));
   const [middle, final] = projectTranscript([start(1), progress, answer, assistant(4, ''), end(5)]);
+
   assert.equal(middle.kind, 'assistant');
   assert.ok(middle.summary.length < middle.text.length);
   assert.equal(middle.expandable, true);
@@ -128,6 +141,7 @@ test('only the last nonempty assistant text before each turn end becomes a full 
   assert.equal(final.expandable, false);
   assert.equal(final.reason, 'completed');
   assert.equal(final.state, 'completed');
+
   const live = projectTranscript([start(1), progress, answer]);
   assert.equal(live[1].kind, 'assistant');
   assert.equal(live[1].key, final.key);
@@ -144,8 +158,10 @@ test('multiple turns and identical followup tasks stay separate and retain turn 
     assistant(7, 'second answer', 2),
     end(8, 2),
   ]);
+
   const tasks = nodes.filter((node) => node.kind === 'task'),
     finals = nodes.filter((node) => node.kind === 'final');
+
   assert.equal(tasks.length, 2);
   assert.notEqual(tasks[0].key, tasks[1].key);
   assert.deepEqual(
@@ -163,6 +179,7 @@ test('provider call ids reused in later turns or steps do not overwrite earlier 
   secondCall.data.step = 2;
   const secondResult = result(6, 'reused', 'second output');
   secondResult.data.step = 2;
+
   const nodes = projectTranscript([
     start(1),
     call(2, 'reused', 'shell', { command: 'first command' }),
@@ -174,6 +191,7 @@ test('provider call ids reused in later turns or steps do not overwrite earlier 
     call(9, 'reused', 'shell', { command: 'third command' }, 2),
     result(10, 'reused', 'third output', false, 2),
   ]);
+
   assert.equal(nodes.length, 3);
   assert.equal(new Set(nodes.map((node) => node.key)).size, 3);
   for (let index = 0; index < nodes.length; index++)
@@ -194,10 +212,12 @@ test('runtime context is hidden by default and explicitly available without hidi
     }),
     event(6, 'request/header', { header: { config: { model: 'model-name' } } }),
   ];
+
   assert.deepEqual(
     projectTranscript(rows).map((node) => node.text),
     ['visible user input'],
   );
+
   const expanded = projectTranscript(rows, { system: true });
   for (const value of [
     'visible user input',
@@ -212,12 +232,15 @@ test('runtime context is hidden by default and explicitly available without hidi
 test('reasoning is opt-in and does not change answer keys or final detection', () => {
   const answer = assistant(2, 'visible answer');
   answer.data.message.content.unshift({ type: 'reasoning', text: 'private thought\nfull detail' });
+
   const rows = [start(1), answer, end(3)];
   const plain = projectTranscript(rows),
     expanded = projectTranscript(rows, { reasoning: true });
+
   assert.equal(plain.length, 1);
   assert.ok(!plain[0].text.includes('private thought'));
   assert.equal(expanded.find((node) => node.kind === 'final').key, plain[0].key);
+
   assert.match(
     expanded.find((node) => node.title === 'Thinking').text,
     /private thought\nfull detail/,
@@ -227,11 +250,13 @@ test('reasoning is opt-in and does not change answer keys or final detection', (
 test('bridge report trailers are stripped while the complete original brief and retry feedback remain available', () => {
   const brief = '请实现需求。\n保留这个原始段落。\n字面提及【桥接报告约定】不是尾注。';
   const value = `${brief}\n\n【桥接报告约定】\n桥接内部约定\n\n【返工信息】\n修复测试失败，保留已有成果。\n\n[bridge-task:fixture]\n`;
+
   const nodes = projectTranscript([user(1, value)]);
   assert.equal(nodes[0].text, brief);
   assert.equal(nodes[0].kind, 'task');
   assert.equal(nodes[1].title, 'Rework notes');
   assert.equal(nodes[1].text, '修复测试失败，保留已有成果。');
+
   assert.ok(
     nodes.every(
       (node) => !node.text.includes('桥接内部约定') && !node.text.includes('bridge-task:'),
@@ -245,6 +270,7 @@ test('long CJK tasks have readable short previews and complete original text wit
   assert.equal(node.text, body);
   assert.equal(node.expandable, true);
   assert.equal(node.summary, '请检查界面。 请保留全部有效信息。');
+
   const [unbroken] = projectTranscript([user(2, '中文😀'.repeat(1000))]);
   assert.ok(unbroken.summary.length < 100);
   assert.ok(unbroken.summary.endsWith('…'));
@@ -259,6 +285,7 @@ test('repetitive plan tools collapse into one stable node per turn with all upda
     call(4, 'p2', 'todo_write', { todos: [{ content: 'second task', status: 'completed' }] }),
     result(5, 'p2', 'second saved'),
   ];
+
   const pending = projectTranscript(rows.slice(0, 2)),
     [node] = projectTranscript(rows);
   assert.equal(node.key, pending[0].key);
@@ -267,6 +294,7 @@ test('repetitive plan tools collapse into one stable node per turn with all upda
   assert.equal(node.summary, '2 updates');
   for (const value of ['first task', 'second task', 'first saved', 'second saved'])
     assert.ok(node.text.includes(value));
+
   const extended = projectTranscript([
     ...rows,
     end(6),
@@ -305,12 +333,14 @@ test('questions are prominent pending nodes with complete options and merged ans
       },
     ],
   });
+
   const [pending] = projectTranscript([start(1), ask]);
   assert.equal(pending.kind, 'question');
   assert.equal(pending.state, 'pending');
   assert.equal(pending.tone, 'warning');
   assert.match(pending.summary, /选择哪种模式/);
   assert.match(pending.questions, /保持现状/);
+
   const [answered] = projectTranscript([
     start(1),
     ask,
@@ -332,11 +362,13 @@ test('structured turn failures and non-text attachments keep their actual inform
     type: 'image',
     source: { type: 'url', url: 'https://example.test/image.png' },
   });
+
   const nodes = projectTranscript([
     start(1),
     answer,
     end(3, 1, { kind: 'error', error: { code: 'UNKNOWN', message: 'provider failure' } }),
   ]);
+
   assert.equal(nodes.find((node) => node.kind === 'final').tone, 'error');
   assert.ok(nodes.some((node) => node.text.includes('https://example.test/image.png')));
   const failure = nodes.find((node) => node.title === 'Run failed');
@@ -353,12 +385,14 @@ test('projection does not mutate events and node identity survives visibility ch
     assistant(4, 'answer'),
     end(5),
   ];
+
   const before = JSON.stringify(rows),
     original = projectTranscript(rows);
   const next = projectTranscript([event(0, 'session/title', { title: 'title' }), ...rows], {
     system: true,
     reasoning: true,
   });
+
   assert.equal(JSON.stringify(rows), before);
   for (const node of original) assert.ok(next.some((item) => item.key === node.key));
   for (const node of next) {
@@ -371,9 +405,11 @@ test('projection does not mutate events and node identity survives visibility ch
 test('current English bridge sections are stripped like the legacy Chinese ones', async () => {
   const { PROMPT_MARKERS } = await import('../lib/bridge.mjs');
   const { shortTitle } = await import('../lib/viewer/blocks.mjs');
+
   const brief =
     'Implement the feature.\nKeep this paragraph.\nMentioning [dpsk-bridge report contract] inline is not a trailer.';
   const value = `${brief}\n\n${PROMPT_MARKERS.images}\nThis task includes 1 image, in order: a.png\n\n${PROMPT_MARKERS.contract}\nINTERNAL_CONTRACT\n\n${PROMPT_MARKERS.scope}\nWorkspace root: /w\n\n${PROMPT_MARKERS.rework}\nFix the failing test.\n\n[bridge-task:fixture]\n`;
+
   const nodes = projectTranscript([user(1, value)]);
   assert.equal(nodes[0].text, brief);
   assert.equal(nodes[0].kind, 'task');

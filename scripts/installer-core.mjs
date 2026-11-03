@@ -90,6 +90,7 @@ function readPackage({ requireDshVersion = false } = {}) {
       `Run the installer from a dpsk-bridge checkout (git clone https://github.com/XiaoNetwork-Astral/dpsk-bridge.git)`,
     );
   }
+
   if (pkg?.name !== 'dpsk-bridge')
     fail(
       `Not a dpsk-bridge checkout: ${checkoutRoot}`,
@@ -105,6 +106,7 @@ function readPackage({ requireDshVersion = false } = {}) {
       'package.json is missing a valid dshVersion',
       'Update the checkout to 0.5.0 or newer with: node scripts/installer-core.mjs upgrade',
     );
+
   return pkg;
 }
 
@@ -124,11 +126,13 @@ function parseVersion(value) {
 function compareVersions(left, right) {
   const a = parseVersion(left),
     b = parseVersion(right);
+
   if (!a || !b)
     fail(`Invalid version: ${!a ? left : right}`, 'Use a semantic version such as 0.5.0');
   for (const key of ['major', 'minor', 'patch']) {
     if (a[key] !== b[key]) return a[key] < b[key] ? -1 : 1;
   }
+
   if (!a.prerelease.length && !b.prerelease.length) return 0;
   if (!a.prerelease.length) return 1;
   if (!b.prerelease.length) return -1;
@@ -146,6 +150,7 @@ function compareVersions(left, right) {
     } else if (xNumeric !== yNumeric) return xNumeric ? -1 : 1;
     else if (x !== y) return x < y ? -1 : 1;
   }
+
   return 0;
 }
 
@@ -160,6 +165,7 @@ function stableTagVersion(tag) {
       'Publish a stable v<major>.<minor>.<patch> GitHub Release',
     );
   }
+
   const parsed = parseVersion(tag.replace(/^v/i, ''));
   if (!parsed || parsed.prerelease.length) {
     fail(
@@ -167,6 +173,7 @@ function stableTagVersion(tag) {
       'Publish a stable release, or install the release manually with git',
     );
   }
+
   return `${parsed.major}.${parsed.minor}.${parsed.patch}`;
 }
 
@@ -203,6 +210,7 @@ function listFiles(directory) {
       else if (entry.isFile()) files.push(full);
     }
   };
+
   visit(directory);
   return files.sort();
 }
@@ -210,6 +218,7 @@ function listFiles(directory) {
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+
   try {
     fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
     fs.renameSync(temporary, file);
@@ -252,6 +261,7 @@ function readManifest(file) {
   if (!fs.existsSync(file)) return [];
   const text = fs.readFileSync(file, 'utf8');
   const names = [];
+
   for (const raw of text.split(/\r?\n/)) {
     const name = raw.trim();
     if (!name) continue;
@@ -260,6 +270,7 @@ function readManifest(file) {
     }
     names.push(name);
   }
+
   return names;
 }
 
@@ -283,6 +294,7 @@ function listManifests() {
     if (error.code === 'ENOENT') return [];
     throw error;
   }
+
   return names
     .filter((name) => manifestPattern.test(name))
     .sort()
@@ -303,12 +315,14 @@ function loadPresets() {
       `Restore scripts/host-presets.json (${error.message})`,
     );
   }
+
   const names = Object.keys(presets);
   if (!names.length)
     fail(
       `Host preset list is empty: ${presetFile}`,
       'Restore scripts/host-presets.json from the repository',
     );
+
   for (const name of names) {
     const preset = presets[name];
     if (
@@ -320,16 +334,19 @@ function loadPresets() {
     ) {
       fail(`Host preset ${name} has an invalid manifest name`, `Fix scripts/host-presets.json`);
     }
+
     if (preset.skills !== null && typeof preset.skills !== 'string') {
       fail(`Host preset ${name} has an invalid skills directory`, `Fix scripts/host-presets.json`);
     }
   }
+
   return presets;
 }
 
 const presets = loadPresets();
 const presetNames = Object.keys(presets);
 const fallbackPreset = presetNames.find((name) => !presets[name].skills);
+
 if (!fallbackPreset)
   fail(
     'Host preset list has no fallback preset',
@@ -338,17 +355,20 @@ if (!fallbackPreset)
 
 function presetName(value) {
   const text = String(value ?? '').toLowerCase();
+
   // "Generic" was the pre-0.6 name of the fallback preset; keep accepting it so
   // old scripts and records keep working while every message says "other".
   const key =
     presetNames.find((name) => name.toLowerCase() === text) ||
     (text === 'generic' ? fallbackPreset : null);
+
   if (!key) {
     fail(
       `Unknown target "${value}"; available presets: ${presetNames.join(', ')}`,
       `Use --target Claude, --target Codex, or --target ${fallbackPreset} --skills <absolute-directory>`,
     );
   }
+
   return key;
 }
 
@@ -359,12 +379,14 @@ function presetName(value) {
 function genericKey(directory) {
   let absolute = path.resolve(directory);
   const root = path.parse(absolute).root;
+
   while (
     absolute.length > root.length &&
     (absolute.endsWith(path.sep) || absolute.endsWith('/') || absolute.endsWith('\\'))
   ) {
     absolute = absolute.slice(0, -1);
   }
+
   return crypto
     .createHash('sha256')
     .update(absolute.toLowerCase(), 'utf8')
@@ -384,10 +406,12 @@ function buildHost(preset, root) {
       'Pass --skills <absolute-directory> (for example ~/host/skills)',
     );
   }
+
   const resolved = path.resolve(root);
   const manifestName = presets[preset].skills
     ? presets[preset].manifest
     : presets[preset].manifest.replace('{key}', genericKey(resolved));
+
   return { target: preset, root: resolved, manifest: path.join(stateDir, manifestName) };
 }
 
@@ -399,6 +423,7 @@ function readHostRecords() {
     if (error.code === 'ENOENT') return [];
     throw error;
   }
+
   const records = [];
   for (const name of names.filter((entry) => hostRecordPattern.test(entry)).sort()) {
     const file = path.join(stateDir, name);
@@ -408,6 +433,7 @@ function readHostRecords() {
     } catch (error) {
       fail(`Invalid host record: ${name}`, `Fix or delete ${file} (${error.message})`);
     }
+
     if (typeof record.root !== 'string' || !path.isAbsolute(record.root)) {
       fail(
         `Invalid host record: ${name}`,
@@ -416,6 +442,7 @@ function readHostRecords() {
     }
     const requested = typeof record.target === 'string' ? record.target : '';
     let known = presetNames.find((preset) => preset.toLowerCase() === requested.toLowerCase());
+
     // Pre-0.6 records used "Generic"; treat them as the fallback preset without
     // reporting an unknown preset.
     if (!known && requested.toLowerCase() === 'generic') known = fallbackPreset;
@@ -428,6 +455,7 @@ function readHostRecords() {
       manifest: path.join(stateDir, name.replace(/\.host\.json$/, '.txt')),
     });
   }
+
   return records;
 }
 
@@ -443,6 +471,7 @@ function dedupeHosts(hosts) {
 function chooseHosts({ targets = [], skillsDir = null } = {}) {
   const notices = [];
   const requested = [...new Set(targets.map(presetName))];
+
   if (skillsDir && !requested.includes(fallbackPreset)) {
     fail(
       `--skills is only valid with --target ${fallbackPreset}`,
@@ -458,6 +487,7 @@ function chooseHosts({ targets = [], skillsDir = null } = {}) {
         'Pass the full path, for example ~/.config/host/skills',
       );
   }
+
   if (requested.length) {
     return {
       hosts: dedupeHosts(
@@ -468,6 +498,7 @@ function chooseHosts({ targets = [], skillsDir = null } = {}) {
       notices,
     };
   }
+
   // Default install: every recorded harness plus every newly detected one.
   const records = readHostRecords();
   for (const record of records) {
@@ -479,15 +510,18 @@ function chooseHosts({ targets = [], skillsDir = null } = {}) {
     }
   }
   const hosts = records.map((record) => buildHost(record.target, record.root));
+
   const detected = [];
   if (fs.existsSync(path.join(home, '.claude'))) detected.push('Claude');
   if (fs.existsSync(path.join(home, '.agents')) || fs.existsSync(path.join(home, '.codex')))
     detected.push('Codex');
+
   for (const preset of detected) {
     const root = defaultRoot(preset);
     if (hosts.some((host) => host.target === preset || samePath(host.root, root))) continue;
     hosts.push(buildHost(preset, root));
   }
+
   return { hosts: dedupeHosts(hosts), notices };
 }
 
@@ -517,6 +551,7 @@ function assertNoLinkAncestors(root, destination) {
     );
   if (stat && !stat.isDirectory())
     fail(`Skills path is not a directory: ${current}`, 'Choose a directory path');
+
   for (const part of relative.split(path.sep).filter(Boolean)) {
     current = path.join(current, part);
     const entry = lstatIfExists(current);
@@ -538,6 +573,7 @@ function assertNoLinksInTree(directory) {
       'Replace the link with a real file or directory, then re-run',
     );
   if (!stat.isDirectory()) return;
+
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const full = path.join(directory, entry.name);
     if (entry.isSymbolicLink())
@@ -569,6 +605,7 @@ function repositorySkills() {
       'Restore the skill/ directory (git checkout -- skill)',
     );
   }
+
   const found = names
     .filter(
       (entry) =>
@@ -576,6 +613,7 @@ function repositorySkills() {
     )
     .map((entry) => entry.name)
     .sort();
+
   if (!found.length)
     fail(
       'No skills found in this checkout',
@@ -588,6 +626,7 @@ function syncHosts(hosts) {
   const names = repositorySkills();
   let totalChanged = 0,
     totalBackups = 0;
+
   for (const host of hosts) {
     assertNoLinkAncestors(host.root, host.root);
     fs.mkdirSync(host.root, { recursive: true });
@@ -598,14 +637,17 @@ function syncHosts(hosts) {
       backups++;
       return backupPath(source, label);
     };
+
     for (const skill of names) {
       const sourceDirectory = path.join(skillsRoot, skill);
       const destinationDirectory = path.join(host.root, skill);
       assertSafePath(host.root, destinationDirectory);
+
       for (const sourceFile of listFiles(sourceDirectory)) {
         const relative = path.relative(sourceDirectory, sourceFile);
         const destinationFile = path.join(destinationDirectory, relative);
         assertInside(host.root, destinationFile);
+
         if (fs.existsSync(destinationFile)) {
           const sourceBytes = fs.readFileSync(sourceFile);
           const destinationBytes = fs.readFileSync(destinationFile);
@@ -618,6 +660,7 @@ function syncHosts(hosts) {
         }
         changed++;
       }
+
       for (const destinationFile of listFiles(destinationDirectory)) {
         const relative = path.relative(destinationDirectory, destinationFile);
         if (fs.existsSync(path.join(sourceDirectory, relative))) continue;
@@ -626,6 +669,7 @@ function syncHosts(hosts) {
         changed++;
       }
     }
+
     for (const old of previous) {
       if (names.includes(old)) continue;
       const destination = path.join(host.root, old);
@@ -635,8 +679,10 @@ function syncHosts(hosts) {
       fs.rmSync(destination, { recursive: true, force: true });
       changed++;
     }
+
     writeManifest(host.manifest, names);
     writeJson(hostRecordPath(host.manifest), { target: host.target, root: host.root });
+
     if (changed) {
       step(
         '✓',
@@ -647,21 +693,25 @@ function syncHosts(hosts) {
     } else {
       step('✓', `${host.target} skills up to date (${names.length} skills)`, host.root);
     }
+
     totalChanged += changed;
     totalBackups += backups;
   }
+
   return { changed: totalChanged, backups: totalBackups };
 }
 
 // Migrate pre-0.4 ownership manifests once, exactly like the PowerShell installer.
 function migrateLegacyManifests() {
   if (!fs.existsSync(legacyStateDir) || fs.existsSync(migrationMarker)) return;
+
   fs.mkdirSync(stateDir, { recursive: true });
   for (const name of fs.readdirSync(legacyStateDir)) {
     if (!manifestPattern.test(name)) continue;
     const target = path.join(stateDir, name);
     if (!fs.existsSync(target)) fs.copyFileSync(path.join(legacyStateDir, name), target);
   }
+
   fs.writeFileSync(
     migrationMarker,
     'Legacy ownership manifests copied once. Original backups preserved.',
@@ -687,12 +737,14 @@ function resolveNpmCli() {
       path.join(directory, '..', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
     ]),
   ];
+
   for (const candidate of candidates) {
     if (!candidate || path.basename(candidate) !== 'npm-cli.js') continue;
     try {
       if (fs.statSync(candidate).isFile()) return fs.realpathSync(candidate);
     } catch {}
   }
+
   fail('Cannot locate npm/bin/npm-cli.js', 'Install Node.js with npm and reopen the terminal');
 }
 
@@ -710,6 +762,7 @@ function runNpm(args, { cwd = checkoutRoot, timeoutMs = 900000, allowFailure = f
       `Cannot run npm ${args[0]}: ${result.error.message}`,
       'Install Node.js with npm and reopen the terminal',
     );
+
   if (!allowFailure && result.status !== 0) {
     const detail = String(result.stderr || result.stdout || '')
       .trim()
@@ -721,6 +774,7 @@ function runNpm(args, { cwd = checkoutRoot, timeoutMs = 900000, allowFailure = f
       `cd "${checkoutRoot}" && npm ${args.join(' ')}`,
     );
   }
+
   return result;
 }
 
@@ -729,6 +783,7 @@ function npmPrefix() {
     const configured = process.env.npm_config_prefix || process.env.NPM_CONFIG_PREFIX;
     return configured ? path.resolve(configured) : null;
   }
+
   const result = runNpm(['prefix', '-g'], { timeoutMs: 60000 });
   const prefix = String(result.stdout || '')
     .trim()
@@ -736,6 +791,7 @@ function npmPrefix() {
     .filter(Boolean)
     .pop();
   if (!prefix) fail('Cannot read the npm global prefix', 'Run: npm prefix -g');
+
   return path.resolve(prefix);
 }
 
@@ -745,6 +801,7 @@ function findOnPath(name) {
     process.platform === 'win32'
       ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean)
       : [''];
+
   for (const directory of directories) {
     for (const extension of extensions) {
       const candidate = path.join(directory, name + extension.toLowerCase());
@@ -755,6 +812,7 @@ function findOnPath(name) {
       } catch {}
     }
   }
+
   return null;
 }
 
@@ -765,7 +823,9 @@ function runShim(file, args, { timeoutMs = 60000 } = {}) {
     timeout: timeoutMs,
     maxBuffer: 4 * 1024 * 1024,
   };
+
   if (process.platform !== 'win32') return spawnSync(file, args, options);
+
   const line = [file, ...args]
     .map((value) => (/[\s"&|<>^]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value))
     .join(' ');
@@ -775,8 +835,10 @@ function runShim(file, args, { timeoutMs = 60000 } = {}) {
 function readDshVersion() {
   const command = findOnPath('dsh');
   if (!command) return null;
+
   const result = runShim(command, ['--version'], { timeoutMs: 30000 });
   if (result.error || result.status !== 0) return null;
+
   const text =
     String(result.stdout || '')
       .trim()
@@ -791,6 +853,7 @@ function checkNode(pkg) {
   const range = typeof pkg.engines?.node === 'string' ? pkg.engines.node : '';
   const match = />=\s*(\d+)\.(\d+)/.exec(range);
   if (!match) return;
+
   const required = [Number(match[1]), Number(match[2])];
   const current = process.versions.node.split('.').map(Number);
   if (current[0] < required[0] || (current[0] === required[0] && current[1] < required[1])) {
@@ -799,6 +862,7 @@ function checkNode(pkg) {
       `Install Node.js ${required[0]}.${required[1]} or newer and reopen the terminal`,
     );
   }
+
   step('✓', `Node.js ${process.versions.node}`);
 }
 
@@ -815,20 +879,24 @@ function installDependencies() {
 
 function ensureDsh(minimumVersion) {
   if (skipSystem) return;
+
   const current = readDshVersion();
   if (current && compareVersions(current, minimumVersion) >= 0) {
     step('✓', `dsh ${current}`);
     return;
   }
+
   const label = current
     ? `Updated dsh ${current} → ${minimumVersion}`
     : `Installed dsh ${minimumVersion}`;
+
   const result = runNpm(
     ['install', '-g', `@deepseek-ai/dsh@${minimumVersion}`, '--no-fund', '--no-audit'],
     { timeoutMs: 600000 },
   );
   if (result.status !== 0)
     fail('Cannot install dsh', `npm install -g @deepseek-ai/dsh@${minimumVersion}`);
+
   const installed = readDshVersion();
   if (!installed || compareVersions(installed, minimumVersion) < 0) {
     fail(
@@ -836,6 +904,7 @@ function ensureDsh(minimumVersion) {
       `npm install -g @deepseek-ai/dsh@${minimumVersion}, then re-run install`,
     );
   }
+
   step('✓', label, 'existing configuration and credentials preserved');
 }
 
@@ -876,6 +945,7 @@ function removeShims(prefix, names, pattern, label) {
         continue;
       }
       if (!stat.isFile()) continue;
+
       let text = '';
       try {
         text = fs.readFileSync(file, 'utf8');
@@ -883,6 +953,7 @@ function removeShims(prefix, names, pattern, label) {
         continue;
       }
       if (!pattern.test(text)) continue;
+
       backupPath(file, `${label}-${name}`);
       fs.rmSync(file, { force: true });
       step(
@@ -912,6 +983,7 @@ function verifyCommands(prefix, version) {
     if (!fs.existsSync(shim)) {
       fail(`Missing global launcher: ${name}`, `cd "${checkoutRoot}" && npm link`);
     }
+
     const result = runShim(shim, ['--version'], { timeoutMs: 60000 });
     const reported =
       String(result.stdout || '')
@@ -924,6 +996,7 @@ function verifyCommands(prefix, version) {
       step('!', `${name} PATH fix`, pathHint(prefix));
       continue;
     }
+
     step('✓', `${name}: ${shim}`);
     const onPath = findOnPath(name);
     if (!samePath(onPath, shim)) {
@@ -936,16 +1009,20 @@ function ensureLink(version) {
   if (skipSystem) return;
   const prefix = npmPrefix();
   if (!prefix) return;
+
   const link = path.join(prefix, 'node_modules', 'dpsk-bridge');
   const existing = linkTarget(link);
   removeLegacyShims(prefix);
+
   if (samePath(existing, checkoutRoot) && launchersExist(prefix)) {
     step('✓', 'dsb / dsv already linked to this checkout');
     verifyCommands(prefix, version);
     return;
   }
+
   if (existing) {
     step('!', 'Replacing the global dpsk-bridge link', `was ${existing}`);
+
     runNpm(['unlink', '-g', 'dpsk-bridge', '--ignore-scripts', '--no-fund', '--no-audit'], {
       timeoutMs: 120000,
       allowFailure: true,
@@ -956,15 +1033,18 @@ function ensureLink(version) {
       } catch {}
     }
   }
+
   removeRenamedShims(prefix);
   const result = runNpm(
     ['link', '--offline', '--ignore-scripts', '--package-lock=false', '--no-fund', '--no-audit'],
     { timeoutMs: 300000 },
   );
   if (result.status !== 0) fail('npm link failed', `cd "${checkoutRoot}" && npm link`);
+
   if (!samePath(linkTarget(link), checkoutRoot)) {
     fail('npm link did not create the expected global link', `cd "${checkoutRoot}" && npm link`);
   }
+
   step('✓', 'Linked dsb / dsv to this checkout', 'keep this directory in place');
   verifyCommands(prefix, version);
 }
@@ -981,10 +1061,12 @@ function removeGlobalLink() {
     );
     return;
   }
+
   if (!prefix) {
     step('!', 'System steps skipped; the global command link was left unchanged');
     return;
   }
+
   const link = path.join(prefix, 'node_modules', 'dpsk-bridge');
   if (samePath(linkTarget(link), checkoutRoot)) {
     if (skipSystem) {
@@ -1000,10 +1082,12 @@ function removeGlobalLink() {
       );
       if (result.status !== 0) fail('npm unlink failed', 'npm unlink -g dpsk-bridge');
     }
+
     step('✓', 'Removed shared dsb / dsv commands');
   } else {
     step('✓', 'No global link to this checkout; left other installations alone');
   }
+
   removeLegacyShims(prefix);
 }
 
@@ -1021,6 +1105,7 @@ function git(args, { allowFailure = false, timeoutMs = 120000 } = {}) {
   });
   if (result.error)
     fail(`Cannot run git: ${result.error.message}`, 'Install Git and reopen the terminal');
+
   if (!allowFailure && result.status !== 0) {
     const detail = String(result.stderr || result.stdout || '')
       .trim()
@@ -1032,16 +1117,20 @@ function git(args, { allowFailure = false, timeoutMs = 120000 } = {}) {
       `git -C "${checkoutRoot}" ${args.join(' ')}`,
     );
   }
+
   return result;
 }
 
 function repositorySlug(value) {
   if (typeof value !== 'string') return null;
+
   const text = value.trim().replace(/^git\+/i, '');
   const scp = /^git@github\.com:([^/\s]+)\/([^/\s]+?)(?:\.git)?$/i.exec(text);
   if (scp) return `${scp[1]}/${scp[2]}`;
+
   try {
     const url = new URL(text);
+
     if (
       !['https:', 'ssh:'].includes(url.protocol) ||
       url.hostname.toLowerCase() !== 'github.com' ||
@@ -1050,9 +1139,11 @@ function repositorySlug(value) {
       url.hash
     )
       return null;
+
     if (url.protocol === 'ssh:') {
       if (url.username !== 'git' || url.password) return null;
     } else if (url.username || url.password) return null;
+
     const match = /^\/([^/]+)\/([^/]+?)(?:\.git)?$/.exec(url.pathname);
     return match ? `${match[1]}/${match[2]}` : null;
   } catch {
@@ -1078,6 +1169,7 @@ function assertUpgradeReady(official) {
       'Checkout has local changes or untracked files; commit or move them before upgrading',
       `git -C "${checkoutRoot}" status --short`,
     );
+
   const root = git(['rev-parse', '--show-toplevel']).stdout.trim();
   if (!samePath(root, checkoutRoot)) {
     fail(
@@ -1085,11 +1177,13 @@ function assertUpgradeReady(official) {
       `cd "${checkoutRoot}" && git rev-parse --show-toplevel`,
     );
   }
+
   // Read the configured URL, not the insteadOf-rewritten one, as the wrappers do.
   const origins = git(['config', '--get-all', 'remote.origin.url'])
     .stdout.trim()
     .split(/\r?\n/)
     .filter(Boolean);
+
   if (
     origins.length !== 1 ||
     !repositorySlug(origins[0]) ||
@@ -1104,16 +1198,19 @@ function assertUpgradeReady(official) {
 
 async function latestReleaseTag(official) {
   if (upgradeTagOverride) return upgradeTagOverride;
+
   const controller = new AbortController();
   const timer = setTimeout(
     () => controller.abort(new Error('GitHub release check timed out')),
     8000,
   );
+
   try {
     const response = await fetch(`https://api.github.com/repos/${official}/releases/latest`, {
       signal: controller.signal,
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'dpsk-bridge-installer' },
     });
+
     if (response.status === 404)
       fail(
         'No published GitHub Release was found',
@@ -1124,9 +1221,11 @@ async function latestReleaseTag(official) {
         `GitHub release lookup returned HTTP ${response.status}`,
         'Check network access, then retry; or run: dsv update --check',
       );
+
     const text = await response.text();
     if (Buffer.byteLength(text) > 1024 * 1024)
       fail('GitHub release response exceeds 1 MiB', 'Check network access, then retry');
+
     const release = JSON.parse(text);
     if (release.draft !== false || release.prerelease !== false) {
       fail(
@@ -1134,6 +1233,7 @@ async function latestReleaseTag(official) {
         'Wait for a stable release, or update the checkout manually with git',
       );
     }
+
     return release.tag_name;
   } catch (error) {
     if (error instanceof InstallerError) throw error;
@@ -1156,6 +1256,7 @@ function applyLocalUpgrade(tag, target) {
       `git -C "${checkoutRoot}" fetch origin tag ${tag}`,
     );
   }
+
   const ancestor = git(['merge-base', '--is-ancestor', 'HEAD', `refs/tags/${tag}`], {
     allowFailure: true,
   });
@@ -1165,6 +1266,7 @@ function applyLocalUpgrade(tag, target) {
       `git -C "${checkoutRoot}" log --oneline --graph --all`,
     );
   }
+
   let tagged;
   try {
     tagged = JSON.parse(git(['show', `refs/tags/${tag}:package.json`]).stdout);
@@ -1172,6 +1274,7 @@ function applyLocalUpgrade(tag, target) {
     if (error instanceof InstallerError) throw error;
     fail(`Cannot read package.json at ${tag}`, `git -C "${checkoutRoot}" show ${tag}:package.json`);
   }
+
   const taggedVersion = parseVersion(tagged.version);
   if (
     tagged.name !== 'dpsk-bridge' ||
@@ -1186,6 +1289,7 @@ function applyLocalUpgrade(tag, target) {
       `git -C "${checkoutRoot}" show ${tag}:package.json`,
     );
   }
+
   const merge = git(['merge', '--ff-only', `refs/tags/${tag}`], { allowFailure: true });
   if (merge.status !== 0) {
     fail(
@@ -1209,6 +1313,7 @@ function schedulerHome() {
 
 async function reserveUpdate() {
   const timer = setTimeout(() => step('!', 'Waiting for active bridge jobs before updating'), 1000);
+
   try {
     return await acquireSlot({
       home: schedulerHome(),
@@ -1236,6 +1341,7 @@ function printHelp() {
   try {
     version = JSON.parse(fs.readFileSync(packageFile, 'utf8')).version || version;
   } catch {}
+
   process.stdout.write(`${bold(`dpsk-bridge installer ${version}`)}
 
 Usage:
@@ -1259,6 +1365,7 @@ Next: node scripts/installer-core.mjs install --target Claude
 
 function summary(hosts) {
   process.stdout.write('\n');
+
   if (hosts.length) {
     process.stdout.write(
       `${bold('Next:')} dsb run --cwd <project> --brief <file>. ` +
@@ -1277,17 +1384,21 @@ async function installCommand({ targets, skillsDir }) {
   const pkg = readPackage({ requireDshVersion: true });
   const version = pkg.version;
   process.stdout.write(`${bold(`dpsk-bridge ${version}`)}\n${dim(`Checkout: ${checkoutRoot}`)}\n`);
+
   checkNode(pkg);
+
   const { hosts, notices } = chooseHosts({ targets, skillsDir });
   for (const notice of notices) step('!', notice);
   migrateLegacyManifests();
   installDependencies();
   ensureDsh(pkg.dshVersion);
+
   if (!hosts.length) {
     step('!', 'No host detected; installed the shared commands only');
   } else {
     syncHosts(hosts);
   }
+
   ensureLink(version);
   writeJson(installRecordFile, {
     version,
@@ -1303,12 +1414,14 @@ async function upgradeCommand({ targets, skillsDir }) {
   let pkg = readPackage();
   const from = pkg.version;
   process.stdout.write(`${bold(`dpsk-bridge ${from}`)}\n${dim(`Checkout: ${checkoutRoot}`)}\n`);
+
   const official = officialRepository(pkg);
   const { hosts, notices } = chooseHosts({ targets, skillsDir });
   for (const notice of notices) step('!', notice);
   assertUpgradeReady(official);
   const tag = await latestReleaseTag(official);
   const targetVersion = stableTagVersion(tag);
+
   // The reservation is taken only when the checkout is about to change, and is
   // held through dependency setup and skill sync, exactly like dsv update.
   let reservation = null;
@@ -1317,6 +1430,7 @@ async function upgradeCommand({ targets, skillsDir }) {
       step('✓', `Already on ${from}; no upgrade needed`);
     } else {
       reservation = await reserveUpdate();
+
       // Another updater may have finished while this one waited for the jobs.
       const current = readPackage().version;
       if (compareVersions(targetVersion, current) <= 0) {
@@ -1336,19 +1450,23 @@ async function upgradeCommand({ targets, skillsDir }) {
           if (fetch.status !== 0)
             fail(`Cannot fetch release ${tag}`, `git -C "${checkoutRoot}" fetch origin tag ${tag}`);
         }
+
         applyLocalUpgrade(tag, targetVersion);
         step('✓', `Upgraded ${current} → ${targetVersion}`, tag);
       }
     }
+
     pkg = readPackage({ requireDshVersion: true });
     migrateLegacyManifests();
     installDependencies();
     ensureDsh(pkg.dshVersion);
+
     if (!hosts.length) {
       step('!', 'No host detected; installed the shared commands only');
     } else {
       syncHosts(hosts);
     }
+
     ensureLink(pkg.version);
     writeJson(installRecordFile, {
       version: pkg.version,
@@ -1368,11 +1486,14 @@ async function uninstallCommand({ targets, all, skillsDir }) {
   process.stdout.write(
     `${bold(`dpsk-bridge ${pkg.version}`)}\n${dim(`Checkout: ${checkoutRoot}`)}\n`,
   );
+
   if (!all && !targets.length) {
     fail('Specify a host to uninstall or use --all', `node "${scriptFile}" uninstall --all`);
   }
+
   const records = readHostRecords();
   const requested = [...new Set(targets.map(presetName))];
+
   if (skillsDir && !requested.includes(fallbackPreset)) {
     fail(
       `--skills is only valid with --target ${fallbackPreset}`,
@@ -1385,6 +1506,7 @@ async function uninstallCommand({ targets, all, skillsDir }) {
       `Pass the full path to the ${fallbackPreset} skills directory`,
     );
   }
+
   let hosts = [];
   if (all) {
     hosts = records.map((record) => ({
@@ -1393,9 +1515,11 @@ async function uninstallCommand({ targets, all, skillsDir }) {
       manifest: record.manifest,
       record: record.file,
     }));
+
     // Also cover manifests whose host record was deleted by hand.
     for (const preset of presetNames.filter((name) => presets[name].skills)) {
       const manifest = path.join(stateDir, presets[preset].manifest);
+
       if (!fs.existsSync(manifest) || hosts.some((host) => samePath(host.manifest, manifest)))
         continue;
       const host = buildHost(preset, defaultRoot(preset));
@@ -1409,13 +1533,16 @@ async function uninstallCommand({ targets, all, skillsDir }) {
           hosts.push({ ...host, record: hostRecordPath(host.manifest) });
           continue;
         }
+
         const custom = records.filter((record) => record.target === fallbackPreset);
+
         if (custom.length !== 1) {
           fail(
             `${fallbackPreset} requires --skills (or use --all for every host)`,
             `node "${scriptFile}" uninstall --all`,
           );
         }
+
         hosts.push({
           target: fallbackPreset,
           root: custom[0].root,
@@ -1446,6 +1573,7 @@ async function uninstallCommand({ targets, all, skillsDir }) {
   for (const plan of plans) {
     for (const name of plan.skills) assertSafePath(plan.root, path.join(plan.root, name));
   }
+
   for (const plan of plans) {
     let removed = 0;
     for (const name of plan.skills) {
@@ -1456,8 +1584,10 @@ async function uninstallCommand({ targets, all, skillsDir }) {
       step('✓', `${plan.target} skill ${name} removed`, `backup: ${backup}`);
       removed++;
     }
+
     if (fs.existsSync(plan.manifest)) fs.rmSync(plan.manifest, { force: true });
     if (fs.existsSync(plan.record)) fs.rmSync(plan.record, { force: true });
+
     step(
       removed ? '✓' : '!',
       removed ? `${plan.target} skills removed` : `${plan.target} skills were not installed`,
@@ -1472,6 +1602,7 @@ async function uninstallCommand({ targets, all, skillsDir }) {
       return true;
     }
   });
+
   if (remaining.length && !all) {
     step(
       '!',
@@ -1479,11 +1610,13 @@ async function uninstallCommand({ targets, all, skillsDir }) {
     );
   } else {
     removeGlobalLink();
+
     if (fs.existsSync(installRecordFile)) {
       fs.rmSync(installRecordFile, { force: true });
       step('✓', 'Removed the install record', installRecordFile);
     }
   }
+
   step('✓', 'dsh, credentials, MCP patches, job history, and state files are preserved');
   process.stdout.write(
     dim(`Checkout kept at ${checkoutRoot}; delete it when you no longer need it.\n`),
@@ -1496,6 +1629,7 @@ async function syncCommand() {
   process.stdout.write(
     `${bold(`dpsk-bridge ${pkg.version}`)}\n${dim(`Checkout: ${checkoutRoot}`)}\n`,
   );
+
   const records = readHostRecords();
   if (!records.length) {
     step(
@@ -1505,6 +1639,7 @@ async function syncCommand() {
     );
     return 0;
   }
+
   for (const record of records) {
     if (!record.unknown) continue;
     step(
@@ -1513,6 +1648,7 @@ async function syncCommand() {
         `is handled as ${fallbackPreset} at ${record.root}.`,
     );
   }
+
   syncHosts(dedupeHosts(records.map((record) => buildHost(record.target, record.root))));
   step('✓', 'Installed host skills synchronized');
   return 0;
@@ -1525,6 +1661,7 @@ async function syncCommand() {
 function parseArguments(argv) {
   const plan = { command: null, targets: [], skillsDir: null, all: false, help: false };
   const args = [...argv];
+
   while (args.length) {
     const argument = args.shift();
     if (argument === '--help' || argument === '-h') plan.help = true;
@@ -1553,6 +1690,7 @@ function parseArguments(argv) {
       fail(`Unexpected argument: ${argument}`, 'Run: node scripts/installer-core.mjs --help');
     }
   }
+
   return plan;
 }
 
@@ -1563,6 +1701,7 @@ export async function runCli(argv) {
       printHelp();
       return 0;
     }
+
     if (!plan.command) fail('Specify a command', 'Run: node scripts/installer-core.mjs --help');
     if (!['install', 'upgrade', 'uninstall', 'sync'].includes(plan.command)) {
       fail(
@@ -1582,6 +1721,7 @@ export async function runCli(argv) {
         'Run: node scripts/installer-core.mjs sync',
       );
     }
+
     if (plan.command === 'install') return await installCommand(plan);
     if (plan.command === 'upgrade') return await upgradeCommand(plan);
     if (plan.command === 'uninstall') return await uninstallCommand(plan);
@@ -1593,4 +1733,5 @@ export async function runCli(argv) {
 }
 
 const invokedDirectly = process.argv[1] && samePath(process.argv[1], scriptFile);
+
 if (invokedDirectly) process.exitCode = await runCli(process.argv.slice(2));

@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+
 import {
   checkForUpdate,
   readUpdateSettings,
@@ -38,6 +39,7 @@ function fixture(t) {
   );
   return { directory, root, home, bridgeHome };
 }
+
 const release = (tag = 'v0.5.0', extra = {}) =>
   new Response(JSON.stringify({ tag_name: tag, draft: false, prerelease: false, ...extra }), {
     status: 200,
@@ -47,6 +49,7 @@ const offline = async () => {
   throw new Error('offline');
 };
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 async function until(check, message = 'condition', timeout = 5000) {
   const deadline = Date.now() + timeout;
   while (!check()) {
@@ -64,6 +67,7 @@ test('package metadata and official repository resolution use a single source', 
   assert.equal(packageJson.bugs.url, 'https://github.com/XiaoNetwork-Astral/dpsk-bridge/issues');
   assert.equal(officialRepository(), officialRepo);
   assert.equal(officialRepo, 'XiaoNetwork-Astral/dpsk-bridge');
+
   for (const origin of [
     `https://github.com/${officialRepo}`,
     `https://github.com/${officialRepo}.git`,
@@ -74,6 +78,7 @@ test('package metadata and official repository resolution use a single source', 
     `ssh://git@github.com/${officialRepo}.git`,
   ])
     assert.equal(officialOrigin(origin, officialRepo), true, origin);
+
   for (const origin of [
     'https://example.com/XiaoNetwork-Astral/dpsk-bridge.git',
     `https://github.com/${officialRepo}/extra`,
@@ -96,6 +101,7 @@ test('missing or invalid repository metadata gives a clear update error', async 
   t.after(() =>
     fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }),
   );
+
   const file = path.join(directory, 'package.json');
   assert.throws(() => officialRepository(file), /Cannot read or parse updater package\.json/);
   fs.writeFileSync(file, '{not json');
@@ -107,6 +113,7 @@ test('missing or invalid repository metadata gives a clear update error', async 
     JSON.stringify({ repository: { url: 'https://example.com/owner/repo.git' } }),
   );
   assert.throws(() => officialRepository(file), /GitHub repository/);
+
   const f = fixture(t),
     result = await checkForUpdate({ ...f, force: true, packageFile: file, fetchImpl: release });
   assert.equal(result.available, false);
@@ -125,31 +132,37 @@ test('update settings default to opt-in and persist explicit changes', (t) => {
 test('stable semantic versions, six-hour cache, force, and offline cached availability', async (t) => {
   const f = fixture(t);
   let calls = 0;
+
   const fetchImpl = async (url, options) => {
     calls++;
     assert.ok(url.endsWith(`/${officialRepo}/releases/latest`), url);
     assert.ok(options.signal);
     return release();
   };
+
   const first = await checkForUpdate({ ...f, now: 1000, fetchImpl });
   assert.equal(first.available, true);
   assert.equal(first.current, '0.4.0');
   assert.equal(first.latest, '0.5.0');
   assert.equal(first.url, `https://github.com/${officialRepo}/releases/tag/v0.5.0`);
+
   await checkForUpdate({ ...f, now: 2000, fetchImpl });
   assert.equal(calls, 1);
   await checkForUpdate({ ...f, now: 3000, force: true, fetchImpl });
   assert.equal(calls, 2);
+
   const failed = await checkForUpdate({ ...f, now: 3000 + 7 * 3600000, fetchImpl: offline });
   assert.equal(failed.available, true);
   assert.match(failed.error, /offline/);
   assert.equal(failed.checkedAt, 3000);
+
   fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ version: '0.6.0' }));
   assert.equal((await checkForUpdate({ ...f, now: 4000, fetchImpl })).available, false);
 });
 
 test('no releases, invalid tags, drafts, prereleases, and oversized responses never fail the viewer', async (t) => {
   const f = fixture(t);
+
   const missing = await checkForUpdate({
     ...f,
     force: true,
@@ -158,6 +171,7 @@ test('no releases, invalid tags, drafts, prereleases, and oversized responses ne
   assert.equal(missing.available, false);
   assert.equal(missing.error, undefined);
   assert.equal(missing.latest, null);
+
   for (const [tag, extra] of [
     ['--upload-pack=evil', {}],
     ['v0.5.0;evil', {}],
@@ -173,18 +187,21 @@ test('no releases, invalid tags, drafts, prereleases, and oversized responses ne
     assert.equal(result.available, false);
     assert.ok(result.error, JSON.stringify([tag, extra]));
   }
+
   const huge = await checkForUpdate({
     ...f,
     force: true,
     fetchImpl: async () => new Response('x'.repeat(1024 * 1024 + 1)),
   });
   assert.match(huge.error, /1 MiB/);
+
   const short = await checkForUpdate({
     ...f,
     force: true,
     fetchImpl: async () => release('v0.3.0'),
   });
   assert.equal(short.available, false);
+
   assert.equal((await checkForUpdate({ ...f, force: true, fetchImpl: offline })).available, false);
 });
 
@@ -209,6 +226,7 @@ function git(root, args) {
   assert.equal(result.status, 0, result.stderr);
   return result.stdout.trim();
 }
+
 function repository(t) {
   const f = fixture(t);
   git(f.root, ['init']);
@@ -238,6 +256,7 @@ function repository(t) {
   };
   return { ...f, run, commands, installed };
 }
+
 function reservations(f) {
   return JSON.parse(fs.readFileSync(path.join(f.bridgeHome, 'scheduler', 'state.json'), 'utf8'))
     .reservations;
@@ -247,15 +266,18 @@ test('updates a real clean checkout by fast-forward and invokes npm through Node
   const f = repository(t),
     progress = [];
   const result = await applyUpdate(update, { ...f, onProgress: (text) => progress.push(text) });
+
   assert.equal(result.version, '0.5.0');
   assert.equal(result.restartRequired, true);
   assert.equal(result.warnings, undefined);
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), git(f.root, ['rev-parse', 'v0.5.0']));
+
   const npm = f.commands.filter(([command]) => command === process.execPath);
   assert.equal(npm.length, 3);
   assert.match(npm[0][1][0], /npm-cli\.js$/);
   assert.deepEqual(npm[0][1].slice(1), ['ci', '--ignore-scripts', '--omit=dev']);
   assert.deepEqual(npm[1][1].slice(1), ['run', 'check']);
+
   assert.ok(progress.length >= 8);
   assert.deepEqual(npm[2][1].slice(1), ['run', 'sync-skills']);
   assert.deepEqual(reservations(f), []);
@@ -265,10 +287,12 @@ test('skill-sync warning lines are returned without failing the update', async (
   const f = repository(t),
     base = f.run;
   const warning = 'WARNING: skills not synchronized (simulated)';
+
   const run = async (command, args, options) =>
     command === process.execPath && args.includes('sync-skills')
       ? { code: 0, stdout: '', stderr: warning }
       : base(command, args, options);
+
   const result = await applyUpdate(update, { ...f, run });
   assert.equal(result.updated, true);
   assert.deepEqual(result.warnings, [warning]);
@@ -279,6 +303,7 @@ test('refuses dirty or wrong-origin checkouts before fetch and releases the mute
   for (const kind of ['dirty', 'origin', 'other-repo', 'other-owner']) {
     await t.test(kind, async (t) => {
       const f = repository(t);
+
       if (kind === 'dirty') fs.writeFileSync(path.join(f.root, 'untracked'), 'local data');
       else
         git(f.root, [
@@ -291,6 +316,7 @@ test('refuses dirty or wrong-origin checkouts before fetch and releases the mute
               ? `https://github.com/${officialRepo.split('/')[0]}/not-dpsk-bridge.git`
               : 'https://github.com/someone-else/dpsk-bridge.git',
         ]);
+
       await assert.rejects(
         applyUpdate(update, f),
         kind === 'dirty' ? /local changes|untracked/ : /official/,
@@ -309,10 +335,12 @@ test('rejects malicious tags before execution and divergent history before mergi
   const f = repository(t);
   await assert.rejects(applyUpdate({ ...update, tag: '--config=evil' }, f), /invalid/);
   assert.equal(f.commands.length, 0);
+
   fs.writeFileSync(path.join(f.root, 'local'), 'divergent commit');
   git(f.root, ['add', 'local']);
   git(f.root, ['commit', '-m', 'local divergence']);
   await assert.rejects(applyUpdate(update, f), /not an ancestor/);
+
   assert.equal(
     f.commands.some(([, args]) => args.includes('merge')),
     false,
@@ -323,10 +351,12 @@ test('rejects malicious tags before execution and divergent history before mergi
 test('rejects a release whose package identity disagrees with its tag', async (t) => {
   const f = repository(t),
     base = f.run;
+
   const run = async (command, args, options) =>
     args.includes('show')
       ? { code: 0, stdout: JSON.stringify({ name: 'other-package', version: '0.5.0' }) }
       : base(command, args, options);
+
   await assert.rejects(applyUpdate(update, { ...f, run }), /package name or version/);
   assert.deepEqual(reservations(f), []);
 });
@@ -334,10 +364,12 @@ test('rejects a release whose package identity disagrees with its tag', async (t
 test('dependency failure preserves the advanced checkout and recovery record while releasing the mutex', async (t) => {
   const f = repository(t),
     base = f.run;
+
   const run = async (command, args, options) =>
     command === process.execPath
       ? { code: 1, stderr: 'install failed' }
       : base(command, args, options);
+
   await assert.rejects(applyUpdate(update, { ...f, run }), /No reset was performed/);
   assert.equal(git(f.root, ['rev-parse', 'HEAD']), git(f.root, ['rev-parse', 'v0.5.0']));
   const recovery = JSON.parse(fs.readFileSync(path.join(f.home, 'update-state.json'), 'utf8'));
@@ -349,13 +381,16 @@ test('dependency failure preserves the advanced checkout and recovery record whi
 test('queued updates time out or cancel without disturbing the active reservation', async (t) => {
   const f = repository(t);
   const active = await acquireSlot({ home: f.bridgeHome, id: 'active-job', workspace: f.root });
+
   try {
     await assert.rejects(applyUpdate(update, { ...f, queueTimeoutMs: 30 }), /queue wait timed out/);
+
     const abort = new AbortController();
     const waiting = applyUpdate(update, { ...f, signal: abort.signal });
     await until(() => reservations(f).length === 2, 'update queued');
     abort.abort();
     await assert.rejects(waiting, /queue cancelled/);
+
     assert.equal(reservations(f).length, 1);
     assert.equal(f.commands.length, 0);
   } finally {
@@ -374,6 +409,7 @@ test('rechecks installed version after acquiring the exclusive reservation', asy
   });
   const updating = applyUpdate(update, f);
   const rejected = assert.rejects(updating, /no longer newer/);
+
   try {
     await until(() => reservations(f).length >= 2, 'updater queued');
     fs.writeFileSync(
@@ -383,6 +419,7 @@ test('rechecks installed version after acquiring the exclusive reservation', asy
   } finally {
     await active.release();
   }
+
   await rejected;
   assert.equal(f.commands.length, 0);
   assert.deepEqual(reservations(f), []);
@@ -391,6 +428,7 @@ test('rechecks installed version after acquiring the exclusive reservation', asy
 test('unconfirmed process cleanup retains the exclusive reservation and records recovery details', async (t) => {
   const f = repository(t),
     base = f.run;
+
   const run = async (command, args, options) => {
     if (command === process.execPath) {
       const failure = new Error('Cannot confirm update child stopped');
@@ -400,6 +438,7 @@ test('unconfirmed process cleanup retains the exclusive reservation and records 
     }
     return base(command, args, options);
   };
+
   await assert.rejects(applyUpdate(update, { ...f, run }), /No reset was performed/);
   const recovery = JSON.parse(fs.readFileSync(path.join(f.home, 'update-state.json'), 'utf8'));
   assert.equal(recovery.state, 'cleanup_failed');
@@ -413,6 +452,7 @@ test('unconfirmed process cleanup retains the exclusive reservation and records 
 
 async function retainedUpdate(f, pid) {
   const reservationId = 'update-12345678-1234-1234-1234-123456789abc';
+
   await acquireSlot({
     home: f.bridgeHome,
     id: reservationId,
@@ -420,11 +460,13 @@ async function retainedUpdate(f, pid) {
     exclusive: true,
     maxConcurrent: 1,
   });
+
   const file = path.join(f.bridgeHome, 'scheduler', 'state.json');
   const scheduler = JSON.parse(fs.readFileSync(file, 'utf8'));
   scheduler.reservations[0].supervisorPid = pid;
   scheduler.reservations[0].childPid = pid;
   fs.writeFileSync(file, JSON.stringify(scheduler));
+
   fs.mkdirSync(f.home, { recursive: true });
   fs.writeFileSync(
     path.join(f.home, 'update-state.json'),
@@ -438,12 +480,14 @@ async function retainedUpdate(f, pid) {
       root: f.root,
     }),
   );
+
   return reservationId;
 }
 
 test('update recovery requires confirmation and refuses recorded live processes', async (t) => {
   const f = fixture(t);
   await retainedUpdate(f, process.pid);
+
   await assert.rejects(recoverUpdate(f), /confirmed-stopped/);
   await assert.rejects(recoverUpdate({ ...f, confirmedStopped: true }), /still present or unknown/);
   await assert.rejects(
@@ -454,6 +498,7 @@ test('update recovery requires confirmation and refuses recorded live processes'
     }),
     /does not match/,
   );
+
   assert.equal(reservations(f).length, 1);
   assert.equal(
     JSON.parse(fs.readFileSync(path.join(f.home, 'update-state.json'))).state,
@@ -469,11 +514,13 @@ test('update recovery releases the matching reservation only after its recorded 
   });
   assert.equal(exited.status, 0);
   const pid = Number(exited.stdout.trim());
+
   const reservationId = await retainedUpdate(f, pid);
   const result = await recoverUpdate({ home: f.home, confirmedStopped: true });
   assert.equal(result.unlocked, true);
   assert.equal(result.reservationId, reservationId);
   assert.deepEqual(reservations(f), []);
+
   const state = JSON.parse(fs.readFileSync(path.join(f.home, 'update-state.json')));
   assert.equal(state.state, 'recovered');
   assert.equal(state.reservationId, reservationId);
@@ -486,7 +533,9 @@ test('update recovery rejects ordinary failures and malformed reservation identi
   fs.mkdirSync(f.home);
   const file = path.join(f.home, 'update-state.json');
   fs.writeFileSync(file, JSON.stringify({ state: 'failed', retainedReservation: false }));
+
   await assert.rejects(recoverUpdate({ ...f, confirmedStopped: true }), /repair dependencies/);
+
   fs.writeFileSync(
     file,
     JSON.stringify({
@@ -495,5 +544,6 @@ test('update recovery rejects ordinary failures and malformed reservation identi
       reservationId: '../other',
     }),
   );
+
   await assert.rejects(recoverUpdate({ ...f, confirmedStopped: true }), /invalid reservationId/);
 });

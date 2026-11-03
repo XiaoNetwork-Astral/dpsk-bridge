@@ -4,4 +4,5 @@
 import { main } from '../lib/viewer/cli.mjs';
 
 const code = await main(process.argv.slice(2));
+
 if (code) process.exitCode = code;

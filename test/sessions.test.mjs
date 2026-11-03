@@ -27,8 +27,10 @@ const header = (version = 4, id = 'fixture') => ({
   isSeeded: false,
   delegationDepth: 0,
 });
+
 const event = (type, data, seq = 1) => ({ type, data, seq, time: 1000 + seq });
 const text = (value) => [{ type: 'text', text: value }];
+
 const usage = (inputTokens = 10, outputTokens = 4) => ({
   inputTokens,
   outputTokens,
@@ -36,13 +38,17 @@ const usage = (inputTokens = 10, outputTokens = 4) => ({
   cacheWriteTokens: 0,
   reasoningTokens: 2,
 });
+
 const jsonl = (events) => Buffer.from(events.map((e) => JSON.stringify(e)).join('\n') + '\n');
+
 const cli = fileURLToPath(new URL('../bin/dsv.mjs', import.meta.url));
+
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-sessions-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   return root;
 }
+
 function write(root, relative, bytes) {
   const file = path.join(root, relative);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -63,14 +69,17 @@ test('discovery selects numeric newest generation and ignores staging/noncanonic
     write(root, `project/id/${name}`, 'bad');
   write(root, 'project/session-old/session.v3.jsonl', jsonl([header(3, 'old')]));
   write(root, 'direct/session.v4.jsonl.zstd', zlib.zstdCompressSync(jsonl([header(4, 'direct')])));
+
   const found = listSessionFiles(root);
   assert.equal(found.length, 2);
   assert.equal(found.find((s) => s.id === 'id').file, newest);
   assert.ok(!found.some((s) => s.id === 'old'));
+
   const v10 = write(root, 'project/id/session.v10.jsonl', jsonl([header(10)]));
   assert.equal(listSessionFiles(root).find((s) => s.id === 'id').file, v10);
 });
 
+// Readers
 test('plaintext live tails retain the last complete offset and append without rereading the prefix', (t) => {
   const root = temporary(t),
     first = jsonl([header()]);
@@ -83,17 +92,20 @@ test('plaintext live tails retain the last complete offset and append without re
     Buffer.concat([first, second.subarray(0, second.length - 3)]),
   );
   const reader = createEventReader(file);
+
   const initial = reader.read();
   assert.equal(initial.events.length, 1);
   assert.equal(initial.end, first.length);
   assert.equal(initial.complete, false);
   assert.equal(reader.read().bytesRead, 0);
+
   fs.appendFileSync(file, second.subarray(second.length - 3));
   const next = reader.read();
   assert.equal(next.events.length, 2);
   assert.equal(next.added.length, 1);
   assert.equal(next.complete, true);
   assert.equal(next.bytesRead, second.length);
+
   const third = jsonl([event('turn/start', { turn: 1 }, 2)]);
   fs.appendFileSync(file, third);
   assert.equal(reader.read().bytesRead, third.length);
@@ -103,13 +115,16 @@ test('plaintext live tails retain the last complete offset and append without re
 test('reader resets after truncation and file replacement, including replacement with the same size', (t) => {
   const root = temporary(t),
     file = write(root, 'session.v4.jsonl', jsonl([header(), event('turn/start', { turn: 1 })]));
+
   const reader = createEventReader(file);
   reader.read();
   fs.writeFileSync(file, jsonl([header()]));
   assert.equal(reader.read().reset, true);
+
   const replacement = write(root, 'replacement', jsonl([header(4, 'changed')]));
   fs.unlinkSync(file);
   fs.copyFileSync(replacement, file);
+
   const result = reader.read();
   assert.equal(result.reset, true);
   assert.equal(result.events[0].id, 'changed');
@@ -127,11 +142,13 @@ test('concatenated zstd frames defer torn frames and records split across UTF-8 
     'session.v4.jsonl.zstd',
     Buffer.concat([a, b, c.subarray(0, c.length - 1)]),
   );
+
   const reader = createEventReader(file);
   const initial = reader.read();
   assert.equal(initial.events.length, 1);
   assert.equal(initial.end, a.length);
   assert.equal(initial.complete, false);
+
   fs.appendFileSync(file, c.subarray(c.length - 1));
   const done = reader.read();
   assert.equal(done.events.length, 2);
@@ -150,10 +167,12 @@ test('malformed committed records and invalid zstd are surfaced without trusting
       Buffer.from('null\n{"noType":1}\nnot json\n{"type":"partial"}'),
     ]),
   );
+
   const decoded = readEvents(file);
   assert.equal(decoded.events.length, 1);
   assert.equal(decoded.invalidLines, 3);
   assert.equal(decoded.complete, false);
+
   const invalid = decodeFrom(Buffer.from('not a zstd frame'));
   assert.equal(invalid.complete, false);
   assert.match(invalid.error, /zstd/);
@@ -162,9 +181,11 @@ test('malformed committed records and invalid zstd are surfaced without trusting
 test('reader enforces physical, decoded, and retained event limits', (t) => {
   const root = temporary(t),
     data = jsonl([header(), event('turn/start', { turn: 1 })]);
+
   const plain = write(root, 'session.v4.jsonl', data);
   assert.throws(() => createEventReader(plain, { maxBytes: data.length - 1 }).read(), /limit/);
   assert.throws(() => createEventReader(plain, { maxEvents: 1 }).read(), /limit/);
+
   const compressed = write(
     root,
     'compressed/session.v4.jsonl.zstd',
@@ -187,12 +208,14 @@ test('many independent readers retain session-local offsets and read only each a
     assert.equal(reader.read().events[0].id, `id-${index}`);
     return { file, reader };
   });
+
   for (let index = 0; index < readers.length; index++) {
     const { file, reader } = readers[index];
     const frame = zlib.zstdCompressSync(
       jsonl([event('session/title', { title: `title-${index}` })]),
     );
     fs.appendFileSync(file, frame);
+
     const result = reader.read();
     assert.equal(result.bytesRead, frame.length);
     assert.equal(result.events.length, 2);
@@ -201,6 +224,7 @@ test('many independent readers retain session-local offsets and read only each a
   }
 });
 
+// Usage
 test('usage counts retried attempts, latest compact stream usage, and final settlement replacement', () => {
   const attempt = event('assistant/attempt', {
     turn: 1,
@@ -222,12 +246,14 @@ test('usage counts retried attempts, latest compact stream usage, and final sett
     }),
     event('assistant/message', { turn: 2, step: 1, usage: usage(1, 2), stream: [] }),
   ];
+
   const result = collectUsage(events);
   assert.equal(result.samples, 3);
   assert.equal(result.tokens.uncachedInputTokens, 16);
   assert.equal(result.tokens.outputTokens, 8);
   assert.equal(result.reasoningTokens, 6);
   assert.equal(result.totalTokens, 33);
+
   const replaced = collectUsage([
     attempt,
     event('assistant/message', { turn: 1, step: 1, usage: usage(7, 3) }),
@@ -238,12 +264,14 @@ test('usage counts retried attempts, latest compact stream usage, and final sett
 
 test('usage never reports absent buckets as zero, rejects contradictory totals, and bounds sums', () => {
   const message = (value) => event('assistant/message', { turn: 1, step: 1, usage: value });
+
   const partial = collectUsage([message({ inputTokens: 8, outputTokens: 4, totalTokens: 15 })]);
   assert.equal(partial.tokens.cacheReadTokens, null);
   assert.equal(partial.tokens.cacheWriteTokens, null);
   assert.equal(partial.totalTokens, 15);
   assert.equal(collectUsage([message({ ...usage(), totalTokens: 1 })]).available, false);
   assert.equal(collectUsage([message({ ...usage(), outputTokens: -1 })]).missingSamples, 1);
+
   const overflow = collectUsage([
     message({ inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 1 }),
     event('assistant/message', { turn: 2, step: 1, usage: { inputTokens: 1, outputTokens: 1 } }),
@@ -264,18 +292,21 @@ test('async reader reads compressed logs, defers torn frames, and advances incre
     'session.v4.jsonl.zstd',
     Buffer.concat([a, b, c.subarray(0, c.length - 1)]),
   );
+
   const reader = createAsyncEventReader(file);
   const initial = await reader.read();
   assert.equal(initial.events.length, 1);
   assert.equal(initial.end, a.length);
   assert.equal(initial.complete, false);
   assert.equal((await reader.read()).bytesRead, 0);
+
   fs.appendFileSync(file, c.subarray(c.length - 1));
   const done = await reader.read();
   assert.equal(done.events.length, 2);
   assert.equal(done.events[1].data.content[0].text, '桥');
   assert.equal(done.complete, true);
   assert.equal(done.bytesRead, b.length + c.length);
+
   const later = zlib.zstdCompressSync(jsonl([event('session/title', { title: 'later' })]));
   fs.appendFileSync(file, later);
   const next = await reader.read();
@@ -301,12 +332,14 @@ test('async discovery selects the same generations and the async reader enforces
     size,
   });
   assert.deepEqual(async.map(fields), sync.map(fields));
+
   assert.equal(
     sync.find((item) => item.id === 'id').size,
     fs.statSync(newest).size,
     'sync discovery keeps the size the store uses to pick the reader',
   );
   assert.equal(async.find((item) => item.id === 'id').file, newest);
+
   const data = jsonl([header(), event('turn/start', { turn: 1 })]);
   const plain = write(root, 'plain/session.v4.jsonl', data);
   await assert.rejects(
@@ -314,6 +347,7 @@ test('async discovery selects the same generations and the async reader enforces
     /limit/,
   );
   await assert.rejects(createAsyncEventReader(plain, { maxEvents: 1 }).read(), /limit/);
+
   const compressed = write(
     root,
     'compressed/session.v4.jsonl.zstd',
@@ -324,6 +358,7 @@ test('async discovery selects the same generations and the async reader enforces
   await assert.rejects(createAsyncEventReader(compressed, { maxBytes: 1000 }).read(), /limit/);
 });
 
+// CLI
 test('CLI renders current v4 tool results, system/developer events, structured errors, and usage', (t) => {
   const root = temporary(t);
   const rows = [
@@ -386,11 +421,14 @@ test('CLI renders current v4 tool results, system/developer events, structured e
       8,
     ),
   ];
+
   write(root, 'sessions/project/id/session.v4.jsonl', jsonl(rows));
+
   const result = spawnSync(process.execPath, [cli, 'show', 'latest', '--all', '--full'], {
     encoding: 'utf8',
     env: { ...process.env, DSH_HOME: root, DSH_SESSIONS_ROOT: '' },
   });
+
   assert.equal(result.status, 0, result.stderr);
   for (const value of [
     'current prompt',
@@ -416,11 +454,14 @@ test('CLI reads current compressed sessions from a configured root', (t) => {
       2,
     ),
   ];
+
   write(root, 'project/session-current/session.v4.jsonl.zstd', zlib.zstdCompressSync(jsonl(rows)));
+
   const result = spawnSync(process.execPath, [cli, 'show', 'current', '--full'], {
     encoding: 'utf8',
     env: { ...process.env, DSH_SESSIONS_ROOT: root },
   });
+
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /current prompt/);
   assert.match(result.stdout, /current tool output/);
