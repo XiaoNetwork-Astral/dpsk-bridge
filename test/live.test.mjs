@@ -84,9 +84,10 @@ test('a cancelled marker consumed before delayed request cleanup cannot resurrec
   await until(() => events(f).some(event => event.event === 'request_cancelled'));
   // Simulate a stale directory entry surviving the marker's consumption.
   publish(f, requestId);
-  await delay(250);
+  // Wait for the supervisor's drain to remove the stale entry instead of
+  // racing its 100 ms interval with a fixed delay.
+  await until(() => fs.readdirSync(requestsDir).length === 0);
   assert.deepEqual(f.job.pendingRequests, []);
-  assert.deepEqual(fs.readdirSync(path.join(f.host, 'requests')), []);
   assert.equal(events(f).filter(event => event.event === 'request' && event.requestId === requestId).length, 0);
   await until(() => f.child.waiting); f.child.finish(); await f.task;
   assert.deepEqual(f.job.pendingRequests, []);
