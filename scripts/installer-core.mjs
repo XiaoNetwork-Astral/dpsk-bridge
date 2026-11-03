@@ -782,7 +782,8 @@ function assertUpgradeReady(official) {
     fail(`Upgrade root must be the Git checkout root: ${checkoutRoot}; git reported ${root}`,
       `cd "${checkoutRoot}" && git rev-parse --show-toplevel`);
   }
-  const origins = git(['remote', 'get-url', '--all', 'origin']).stdout.trim().split(/\r?\n/).filter(Boolean);
+  // Read the configured URL, not the insteadOf-rewritten one, as the wrappers do.
+  const origins = git(['config', '--get-all', 'remote.origin.url']).stdout.trim().split(/\r?\n/).filter(Boolean);
   if (origins.length !== 1 || !repositorySlug(origins[0]) ||
       repositorySlug(origins[0]).toLowerCase() !== official.toLowerCase()) {
     fail(`origin must point to the official ${official} repository`,
