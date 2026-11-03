@@ -238,7 +238,7 @@ async function runCli(t, report) {
   fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
   const entry = path.join(root, 'runtime', 'lib', 'bin.mjs');
   fs.writeFileSync(entry, cliRuntime(report));
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.1-rc.3' }));
+  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.2-alpha.3' }));
   const brief = path.join(root, 'brief.md'); fs.writeFileSync(brief, 'cli exit code');
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [dsbBin, 'run', '--brief', brief, '--dsh-entry', entry, '--cwd', root, '--timeout', '20'], {

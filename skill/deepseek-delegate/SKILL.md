@@ -5,7 +5,7 @@ description: Delegate bounded coding, investigation, batch processing, or MCP ta
 
 # DeepSeek delegation (dpsk-bridge)
 
-This skill is for any host agent that can run local commands; Claude Code and Codex are examples. The host agent leads: it works out what the user needs, makes the decisions that shape the result, answers dsh's questions during a run, and accepts or rejects the work. dsh (DeepSeek Harness) carries out each job with its own judgment inside the scope it is given. dpsk-bridge runs dsh through bidirectional SDK sessions and loads MCP servers on demand. It requires Node.js >=24.9 and `@deepseek-ai/dsh` >=0.2.1-rc.3; update to these first, and start jobs only through the current `dsb` launcher.
+This skill is for any host agent that can run local commands; Claude Code and Codex are examples. The host agent leads: it works out what the user needs, makes the decisions that shape the result, answers dsh's questions during a run, and accepts or rejects the work. dsh (DeepSeek Harness) carries out each job with its own judgment inside the scope it is given. dpsk-bridge runs dsh through bidirectional SDK sessions and loads MCP servers on demand. It requires Node.js >=24.9 and `@deepseek-ai/dsh` >=0.2.2-alpha.3; update to these first, and start jobs only through the current `dsb` launcher.
 
 ## How the work is divided
 

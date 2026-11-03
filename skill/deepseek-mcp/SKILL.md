@@ -5,7 +5,7 @@ description: Install, import, inspect, update, or remove MCP server patches for 
 
 # Managing MCP for dsh
 
-For any host agent that can run local commands; Claude Code and Codex are examples. Requires Node.js >=24.9, `@deepseek-ai/dsh` >=0.2.1-rc.3, and the current dpsk-bridge. Each MCP server has one patch file, `<name>-mcp.yml`, in the patch directory `$DSH_HOME/patches` (`~/.dsh/patches` when `DSH_HOME` is unset). A job loads it on demand with `dsb run --patch <file>` (repeatable; any path works). MCP servers available to the host reach dsh only through these patches; load just the servers the task needs, since each one adds tool definitions and startup time.
+For any host agent that can run local commands; Claude Code and Codex are examples. Requires Node.js >=24.9, `@deepseek-ai/dsh` >=0.2.2-alpha.3, and the current dpsk-bridge. Each MCP server has one patch file, `<name>-mcp.yml`, in the patch directory `$DSH_HOME/patches` (`~/.dsh/patches` when `DSH_HOME` is unset). A job loads it on demand with `dsb run --patch <file>` (repeatable; any path works). MCP servers available to the host reach dsh only through these patches; load just the servers the task needs, since each one adds tool definitions and startup time.
 
 ## Listing and reuse
 

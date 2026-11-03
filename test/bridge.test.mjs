@@ -44,7 +44,7 @@ function setup(t, brief) {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
   const entry = path.join(root, 'runtime', 'lib', 'bin.mjs'); fs.writeFileSync(entry, fake);
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.1-rc.3' }));
+  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.2-alpha.3' }));
   const briefFile = path.join(root, 'brief.md'); fs.writeFileSync(briefFile, brief);
   return { root, home: path.join(root, 'bridge'), options: { cwd: root, brief: briefFile, dshEntry: entry, timeout: 10 } };
 }
@@ -228,10 +228,10 @@ test('timeout settles a waiting SDK and old installed SDK gives an upgrade error
   await assert.rejects(runJob(options, () => {}, home), /Update/);
 });
 
-test('dsh 0.2.1-rc.2 is rejected as below the minimum version', async t => {
+test('dsh 0.2.2-alpha.2 is rejected as below the minimum version', async t => {
   const { options, home, root } = setup(t, 'version gate');
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.1-rc.2' }));
-  await assert.rejects(runJob(options, () => {}, home), /Update @deepseek-ai\/dsh to >=0\.2\.1-rc\.3/);
+  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.2-alpha.2' }));
+  await assert.rejects(runJob(options, () => {}, home), /Update @deepseek-ai\/dsh to >=0\.2\.2-alpha\.3/);
 });
 
 test('retry preserves the original task and current SDK settings', async t => {

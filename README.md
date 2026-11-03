@@ -8,7 +8,7 @@ It ships the task bridge `dsb`, the session viewer `dsv`, and two skills. It is 
 
 ## Status
 
-dpsk-bridge tracks the dsh developer preview and moves quickly. It requires dsh ≥ 0.2.1-rc.3 and reads v4 session logs only. Expect breaking changes between versions.
+dpsk-bridge tracks the dsh developer preview and moves quickly. It requires dsh ≥ 0.2.2-alpha.3 and reads v4 session logs only. Expect breaking changes between versions.
 
 ## Install
 
@@ -22,7 +22,7 @@ cd dpsk-bridge
 
 The script installs dependencies and dsh, syncs the skills, and links the `dsb`/`dsv` commands. Do not move the directory afterwards, and reopen your host session.
 
-Without PowerShell, install dsh with `npm install -g @deepseek-ai/dsh@0.2.1-rc.3`, then run `npm ci --ignore-scripts && npm link`, and copy the two folders under `skill/` to wherever your host loads skills from.
+Without PowerShell, install dsh with `npm install -g @deepseek-ai/dsh@0.2.2-alpha.3`, then run `npm ci --ignore-scripts && npm link`, and copy the two folders under `skill/` to wherever your host loads skills from.
 
 ## Usage
 

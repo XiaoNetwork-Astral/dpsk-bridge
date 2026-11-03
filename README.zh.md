@@ -8,7 +8,7 @@ dpsk-bridge 让能执行本地命令的编程助手（Claude Code、Codex 或其
 
 ## 当前状态
 
-项目跟随 dsh 的开发者预览版快速迭代，需要 dsh ≥ 0.2.1-rc.3，只读取 v4 格式的会话日志。版本之间可能有不兼容的改动。
+项目跟随 dsh 的开发者预览版快速迭代，需要 dsh ≥ 0.2.2-alpha.3，只读取 v4 格式的会话日志。版本之间可能有不兼容的改动。
 
 ## 安装
 
@@ -22,7 +22,7 @@ cd dpsk-bridge
 
 脚本会安装依赖和 dsh，同步 skills，并提供 `dsb`/`dsv` 命令。装好后不要移动这个目录，并重新打开宿主会话。
 
-没有 PowerShell 时，先运行 `npm install -g @deepseek-ai/dsh@0.2.1-rc.3` 安装 dsh，再运行 `npm ci --ignore-scripts && npm link`，并把 `skill/` 下的两个目录复制到宿主加载 skill 的位置。
+没有 PowerShell 时，先运行 `npm install -g @deepseek-ai/dsh@0.2.2-alpha.3` 安装 dsh，再运行 `npm ci --ignore-scripts && npm link`，并把 `skill/` 下的两个目录复制到宿主加载 skill 的位置。
 
 ## 使用
 
