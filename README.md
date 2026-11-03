@@ -2,57 +2,74 @@
 
 English | [中文](README.zh.md)
 
-dpsk-bridge lets a coding agent that can run local commands (Claude Code, Codex, or any other agent) delegate tasks to [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) and exchange questions, answers, and follow-ups while the task runs.
+dpsk-bridge lets a host agent delegate bounded tasks to [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) and keep working while they run. A host agent is any coding agent that can run local commands — Claude Code, Codex, or your own; it writes the brief, answers questions during the run, and accepts the result, while dsh does the work in its own SDK session. The package ships the task bridge `dsb`, the session viewer `dsv`, and two skills, `deepseek-delegate` and `deepseek-mcp`, and it is not an MCP server or tied to one host or one model.
 
-It ships the task bridge `dsb`, the session viewer `dsv`, and two skills. It is not an MCP server.
+## How it works
 
-## Status
+1. The host agent writes a brief: the goal, what is already decided, and how to check the result.
+2. `dsb run --brief <FILE>` starts a dsh SDK session for that job and stays attached.
+3. dsh asks questions or requests permissions back over the same SDK connection.
+4. The host answers with `dsb answer` and waits with `dsb wait`.
+5. At the end it reads `dsb result` and records acceptance with `dsb review`.
 
-dpsk-bridge tracks the dsh developer preview and moves quickly. It requires dsh ≥ 0.2.2-alpha.3 and reads v4 session logs only. Expect breaking changes between versions.
+`dsb wait` only reads local files, so waiting costs no model tokens. Only `run` and `retry` call the model.
+
+## Status and requirements
+
+dpsk-bridge tracks the dsh developer preview and moves fast. It requires dsh 0.2.2-alpha.3 or newer and Node.js 24.9 or newer, reads v4 session logs only, and is tested on Windows and Linux. Expect breaking changes between versions; the [changelog](CHANGELOG.md) records them.
 
 ## Install
 
-Requires Node.js ≥ 24.9, Git, and npm. The install script targets Windows PowerShell; the core CLI is tested on Windows and Linux.
+The install script targets Windows PowerShell. The core CLI is tested on Windows and Linux.
 
 ```powershell
 git clone https://github.com/XiaoNetwork-Astral/dpsk-bridge.git
 cd dpsk-bridge
-.\scripts\install.ps1 -Target Claude   # or Codex, or Generic -SkillsDir <DIR>
+.\scripts\install.ps1 -Target Claude    # or Codex, or Generic -SkillsDir <DIR>
 ```
 
-The script installs dependencies and dsh, syncs the skills, and links the `dsb`/`dsv` commands. Do not move the directory afterwards, and reopen your host session.
+The script installs the locked dependencies, installs or upgrades dsh when needed, syncs the skills into that host, and links the `dsb` and `dsv` commands. Run it once per host you use. Do not move the checkout afterwards, and reopen the host session so it picks up the skills. See the [usage reference](docs/usage.md) for updating and uninstalling.
 
-Without PowerShell, install dsh with `npm install -g @deepseek-ai/dsh@0.2.2-alpha.3`, then run `npm ci --ignore-scripts && npm link`, and copy the two folders under `skill/` to wherever your host loads skills from.
+Without PowerShell, install dsh with `npm install -g @deepseek-ai/dsh@0.2.2-alpha.3`, run `npm ci --ignore-scripts && npm link`, and copy `skill/deepseek-delegate` and `skill/deepseek-mcp` to wherever your host loads skills from.
 
-## Usage
+## Quick start
 
-### Delegate a task: dsb
+Write a minimal brief:
+
+```markdown
+# Task
+
+Add a JSON output option to `src/report.mjs` and a test for it.
+Do not change the default output.
+Done when `npm test` passes.
+```
+
+Then start the job in the background, wait for it, and answer if it asks:
 
 ```text
-dsb run --cwd <PROJECT> --brief brief.md    # stays attached until the job ends
-dsb wait <JOB_ID>                           # returns on finish, request, or timeout
-dsb events <JOB_ID> --after <CURSOR>        # read new progress and questions
-dsb answer <JOB_ID> --request <ID> --answer reply.json
-dsb review <JOB_ID> --verdict accepted --note "evidence"
+dsb run --cwd <PROJECT_DIR> --brief brief.md
+dsb wait <ID> --timeout 600
+dsb answer <ID> --request <REQUEST_ID> --answer answer.json
+dsb result <ID>
 ```
 
-Start `run` in the background and wait with `dsb wait` instead of polling: `wait` only reads local files and never calls the model. Only `run` and `retry` call the model. Every command prints one JSON object per line. See `dsb --help` and `dsb <COMMAND> --help` for all options.
+The first line `dsb run` prints carries the job ID. Put `run` in the background and use `dsb wait` instead of polling. Every command prints one JSON object per line, and `dsb <command> --help` shows all options, including short aliases such as `-C` and `-b`.
 
-### Read sessions: dsv
+## Using it from a host agent
 
-```text
-dsv                     full-screen viewer
-dsv ls                  recent sessions
-dsv show latest         result of the latest session
-dsv update              check for and install a release
-```
+Install the skills for your host once; after that the host can dispatch work on its own.
 
-The viewer lists sessions on the left, split into running and finished (by day), and shows the transcript on the right. Everything works from the keyboard; press `?` for all keys.
+- `deepseek-delegate`, at `~/.claude/skills/deepseek-delegate` for Claude, `~/.agents/skills/deepseek-delegate` for Codex, or `<DIR>/deepseek-delegate` for Generic: when to delegate, what the brief must settle, how to wait, answer, and review.
+- `deepseek-mcp`, in the same directory: installing, importing, verifying, and reusing MCP patches for dsh.
+
+## dsv
+
+`dsv` reads the same session logs in a full-screen viewer: sessions on the left, transcript on the right, all keys on `?`. Use `dsv ls` for recent sessions, `dsv show latest` for the newest result, `dsv watch` to follow a live one, and `dsv update` to install a release.
 
 ## Documentation
 
-- [Usage reference](docs/usage.md) (Chinese): waiting, concurrency and scopes, images, experimental features, dsv keys, auto-update, releases
-- [deepseek-delegate skill](skill/deepseek-delegate/SKILL.md): how a host should dispatch, wait, and review
+- [Usage reference](docs/usage.md) (Chinese): every command and option, waiting, concurrency and scopes, images, MCP patches, the dsv keyboard, updates.
+- [deepseek-delegate skill](skill/deepseek-delegate/SKILL.md) and [deepseek-mcp skill](skill/deepseek-mcp/SKILL.md).
 
 ## Development
 
@@ -61,6 +78,10 @@ npm ci --ignore-scripts
 npm run check
 npm test
 ```
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
