@@ -7,8 +7,10 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { acquireSlot, releaseReservation } from '../lib/scheduler.mjs';
+import { liveProcessState } from '../lib/job-state.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const stale = file => { const old = new Date(Date.now() - 2 * 60 * 1000); fs.utimesSync(file, old, old); };
 const thisFile = fileURLToPath(import.meta.url);
 
 // The same file is an actual independent launcher in multiprocess tests.
@@ -16,6 +18,7 @@ if (process.argv[2] === '--scheduler-worker') {
   const options = JSON.parse(process.argv[3]);
   try {
     const slot = await acquireSlot(options);
+    if (options.recordChildPid) await slot.setChildPid(options.recordChildPid);
     if (options.marker) fs.writeFileSync(options.marker, String(process.pid), { flag: 'wx' });
     const start = process.hrtime.bigint().toString();
     process.send?.({ type: 'acquired', pid: process.pid, start });
@@ -187,6 +190,76 @@ if (process.argv[2] === '--scheduler-worker') {
     await assert.rejects(releaseReservation(f.home, 'crashed'), /confirmed-stopped/);
     await releaseReservation(f.home, 'crashed', { confirmedStopped: true });
     const slot = await waiting; await slot.release();
+    assert.deepEqual(state(f).reservations, []);
+  });
+
+  test('a stale heartbeat with a dead launcher and child releases active work for the queue', async t => {
+    const f = fixture(t), heartbeatFile = path.join(f.root, 'heartbeat');
+    fs.writeFileSync(heartbeatFile, '');
+    const crashed = worker(t, options(f, 'crashed', { scopes: ['shared'], hold: 'manual', heartbeatFile }));
+    await crashed.wait('acquired');
+    const dir = path.join(f.home, 'jobs', 'crashed'), eventsFile = path.join(dir, 'events.jsonl');
+    fs.mkdirSync(dir, { recursive: true });
+    const record = { version: 2, id: 'crashed', rootId: 'crashed', parentId: null, processState: 'running',
+      supervisorPid: crashed.child.pid, childPid: null, heartbeatFile, pendingRequests: [], review: null,
+      exitCode: null, reportedResult: null, cwd: f.workspace };
+    fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(record));
+    fs.writeFileSync(eventsFile, '');
+    crashed.child.kill('SIGKILL'); await crashed.closed.catch(() => {});
+    stale(heartbeatFile);
+    const next = await acquireSlot(options(f, 'next', { scopes: ['shared'] }));
+    assert.deepEqual(state(f).reservations.map(item => item.id), ['next']);
+    // The job record must not be rewritten: only the event log explains the release.
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'job.json'), 'utf8')), record);
+    assert.equal(liveProcessState(record), 'unknown');
+    const events = fs.readFileSync(eventsFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].event, 'reservation_released');
+    assert.equal(events[0].reason, 'launcher and dsh process gone, heartbeat stale');
+    assert.ok(Number.isSafeInteger(events[0].time));
+    await next.release();
+  });
+
+  test('a fresh heartbeat keeps an active reservation whose launcher died', async t => {
+    const f = fixture(t), heartbeatFile = path.join(f.root, 'heartbeat');
+    fs.writeFileSync(heartbeatFile, '');
+    const crashed = worker(t, options(f, 'fresh', { scopes: ['shared'], hold: 'manual', heartbeatFile }));
+    await crashed.wait('acquired');
+    crashed.child.kill('SIGKILL'); await crashed.closed.catch(() => {});
+    // The heartbeat was written moments ago, so the launcher may still be alive elsewhere.
+    await assert.rejects(acquireSlot(options(f, 'next', { scopes: ['shared'], queueTimeoutMs: 300 })), { code: 'QUEUE_TIMEOUT' });
+    assert.equal(state(f).reservations.find(item => item.id === 'fresh').state, 'active');
+    // Once the heartbeat is stale the reservation is abandoned; any successful
+    // transaction now prunes it, so manual recovery has nothing left to clear.
+    stale(heartbeatFile);
+    const cleanup = await acquireSlot(options(f, 'cleanup', { scopes: ['cleanup'] }));
+    assert.deepEqual(state(f).reservations.map(item => item.id), ['cleanup']);
+    await assert.rejects(releaseReservation(f.home, 'fresh', { confirmedStopped: true }), /No scheduler reservation/);
+    await cleanup.release();
+  });
+
+  test('an active reservation with a surviving child keeps its slot', async t => {
+    const f = fixture(t), heartbeatFile = path.join(f.root, 'heartbeat');
+    fs.writeFileSync(heartbeatFile, '');
+    const crashed = worker(t, options(f, 'child', { scopes: ['shared'], hold: 'manual', heartbeatFile, recordChildPid: process.pid }));
+    await crashed.wait('acquired');
+    crashed.child.kill('SIGKILL'); await crashed.closed.catch(() => {});
+    stale(heartbeatFile);
+    await assert.rejects(acquireSlot(options(f, 'next', { scopes: ['shared'], queueTimeoutMs: 300 })), { code: 'QUEUE_TIMEOUT' });
+    const kept = state(f).reservations.find(item => item.id === 'child');
+    assert.equal(kept.state, 'active');
+    assert.equal(kept.childPid, process.pid);
+    await releaseReservation(f.home, 'child', { confirmedStopped: true, ignoreChild: true });
+  });
+
+  test('an active reservation without a heartbeat file keeps the old behavior', async t => {
+    const f = fixture(t);
+    const crashed = worker(t, options(f, 'legacy', { scopes: ['shared'], hold: 'manual' }));
+    await crashed.wait('acquired');
+    crashed.child.kill('SIGKILL'); await crashed.closed.catch(() => {});
+    await assert.rejects(acquireSlot(options(f, 'next', { scopes: ['shared'], queueTimeoutMs: 300 })), { code: 'QUEUE_TIMEOUT' });
+    assert.equal(state(f).reservations.find(item => item.id === 'legacy').state, 'active');
+    await releaseReservation(f.home, 'legacy', { confirmedStopped: true });
     assert.deepEqual(state(f).reservations, []);
   });
 
