@@ -78,9 +78,9 @@ The host names below are examples. A host that is not listed follows the "Any ho
 
 The host's background task list shows both the host agent's own commands and dsh jobs. When the host lets you name or describe the background command for `dsb run` / `dsb retry`, start the description with `[dpsk-bridge]` (for example `[dpsk-bridge] Investigate the login failure`) so the user can tell at a glance what dsh is doing. The prefix belongs in the host's task description only, outside the brief.
 
-If your command tool can return output only after the command ends, you cannot answer questions or approvals mid-run. Set `--timeout` to an acceptable upper limit, read the result with `dsb result <ID>` afterwards, and dispatch only tasks that need no decisions midway. If a question causes a timeout, dispatch again with `dsb retry --resume`, which resumes the interrupted work and does not count as the task's rework ("Review and rework").
+If your command tool can return output only after the command ends, you cannot answer questions or approvals mid-run. Set `dsb run --time-limit` to an acceptable upper limit, read the result with `dsb result <ID>` afterwards, and dispatch only tasks that need no decisions midway. If a question causes a timeout, dispatch again with `dsb retry --resume`, which resumes the interrupted work and does not count as the task's rework ("Review and rework").
 
-Wait with `dsb wait <ID> --timeout <seconds>`, with `dsb run` in the background or a process session. It reads only local files and makes no model call; it returns once when the job ends, when a request needs an answer or the user's decision, when the job's context reaches its reminder threshold, or when the timeout passes. Each `status` or `events` check costs the host agent a turn, so use `wait` for waiting and those commands for reading after it returns. `--timeout` defaults to 600, ranges 1–3600, and must fit within what the host allows for a single command. Act on the returned `reason`:
+Wait with `dsb wait <ID> --timeout <seconds>`, with `dsb run` in the background or a process session. It reads only local files and makes no model call; it returns once when the job ends, when a request needs an answer or the user's decision, when the job's context reaches its reminder threshold, or when the timeout passes. Each `status` or `events` check costs the host agent a turn, so use `wait` for waiting and those commands for reading after it returns. The wait's `--timeout` defaults to 600, ranges 1–3600, and must fit within what the host allows for a single command; it is separate from the job's own `--time-limit`. Act on the returned `reason`:
 
 - `timeout`: wait again.
 - `request`: handle it with `dsb events` and `dsb answer` first. `actionableRequests` lists requests not yet answered; answered ones do not return again.
@@ -91,13 +91,13 @@ Wait with `dsb wait <ID> --timeout <seconds>`, with `dsb run` in the background 
 
 A `wait` return says what happened, not whether the task succeeded.
 
-`dsb run` / `retry` also accept `--notify-cmd <command>` (dsb runs the command when the job ends or a new question appears, to wake the host). It is experimental and unverified on real hosts, so leave it unset, for yourself and for the user, until this skill says otherwise.
-
-Example (`2700` seconds is an example limit; adjust per task; repeat `--patch <file>` when MCP is needed):
+Example (`2700` seconds is an example job limit; adjust per task; repeat `--patch <file>` when MCP is needed):
 
 ```text
-dsb run --cwd "<project dir>" --brief "<brief file>" --timeout 2700
+dsb run --cwd "<project dir>" --brief "<brief file>" --time-limit 2700
 ```
+
+The examples here use long option names, which read clearly in a transcript. `dsb <command> --help` lists every option with its default and short alias, and `--name=value` works as well.
 
 The default provider/model is `deepseek-official` / `deepseek-flash`; override with `--provider`, `--model`, or `DPSK_PROVIDER`, `DPSK_MODEL`, and keep any route the user specified.
 
@@ -105,16 +105,16 @@ To let dsh see images, repeat `--image <file>`. Supported formats are JPEG, PNG,
 
 - After each `wait` return, handle `dsb events` and `status.pendingRequests`, so dsh's questions get answered during the run. The full report and error logs stay at the returned paths; read the relevant parts when needed.
 - `dsb status <ID>` shows the process record and `dsb result <ID>` the short report. `completed` only means the process exit code was 0; `reportedResult` is the model's own claim, and `acceptance` is the review result recorded by the host agent.
-- Launchers that share one `DSH_HOME` run at most 8 jobs at once by default; adjust with `DPSK_CONCURRENCY` or `--max-concurrent <1..256>`. The smallest limit among the participants applies, so when raising it set the same value for every launcher. Write jobs in one workspace exclude each other by default; repeat `--scope <path>` to let non-overlapping scopes run in parallel (paths relative to the Git workspace root). `--read-only` jobs run in parallel with each other and exclude overlapping write jobs; it is a cooperative declaration, not a sandbox. Repeat `--resource <name>` to serialize jobs across workspaces that share a resource. The host agent, IDEs, and other launch methods sit outside these reservations and coordinate scopes themselves.
+- Launchers that share one `DSH_HOME` run at most 8 jobs at once by default; adjust with `DPSK_CONCURRENCY` or `--concurrency <1..256>`. The smallest limit among the participants applies, so when raising it set the same value for every launcher. Write jobs in one workspace exclude each other by default; repeat `--scope <path>` to let non-overlapping scopes run in parallel (paths relative to the Git workspace root). `--read-only` jobs run in parallel with each other and exclude overlapping write jobs; it is a cooperative declaration, not a sandbox. Repeat `--resource <name>` to serialize jobs across workspaces that share a resource. The host agent, IDEs, and other launch methods sit outside these reservations and coordinate scopes themselves.
 - A local file-system queue persists the queue state; cancellation and timeouts cover the queued phase. `cleanup_failed` jobs, and `unknown` jobs that had already started, keep their reservation until the host confirms the processes stopped (see Troubleshooting); a reservation still queued when its launcher disappeared is cleared automatically.
 - When MCP is needed, read the first 4 lines of `*-mcp.yml` in `$DSH_HOME/patches` (`~/.dsh/patches` when `DSH_HOME` is unset), check the prerequisites, and load only the needed `--patch <file>` (repeatable); jobs without MCP load none. When a verification result exists and the configuration is unchanged, reuse it as it is. When a configuration is missing, use the `deepseek-mcp` skill from the same package.
 - Use the correct project root. For long paths, permissions, or locked files, read [Troubleshooting](references/troubleshooting.md); keep the project scope and the sandbox as they are while fixing the call.
 
 ## Two-way messages and requests
 
-To add context during the run, write the message to a UTF-8 file and run `dsb send <ID> --message-file <file>`. Follow-ups enter the next turn without interrupting the current step. Keep them short and few, since each one lengthens the session; when the plan itself changes, cancel and dispatch a new brief. After the job ends, `send` stops working; use `retry` to continue in a new session.
+To add context during the run, write the message to a UTF-8 file and run `dsb send <ID> --message <file>`. Follow-ups enter the next turn without interrupting the current step. Keep them short and few, since each one lengthens the session; when the plan itself changes, cancel and dispatch a new brief. After the job ends, `send` stops working; use `retry` to continue in a new session.
 
-Read updates with `dsb events <ID> --after <byte cursor> --limit 20`, starting from cursor `0`; keep the returned `cursor`, and call again while `more` is true. `--limit` defaults to 20 with a maximum of 200; the cursor is a byte position, not an event number. Together with `pendingRequests` from `dsb status <ID>`, this shows dsh's questions and permission requests.
+Read updates with `dsb events <ID> --cursor <byte cursor> --limit 20`, starting from cursor `0`; keep the returned `cursor`, and call again while `more` is true. `--limit` defaults to 20 with a maximum of 200; the cursor is a byte position, not an event number. Together with `pendingRequests` from `dsb status <ID>`, this shows dsh's questions and permission requests.
 
 Write the answer as a JSON file and run `dsb answer <ID> --request <request ID> --answer <JSON file>`. An answer to an ordinary question looks like this:
 
@@ -124,7 +124,7 @@ Write the answer as a JSON file and run `dsb answer <ID> --request <request ID> 
 
 `id` is the question ID from the request; include every question of the request exactly once. `selected` is an array of strings, filled according to the request when it offers options; `custom` is optional. Permission answers are `{"outcome":"allowed-once"}`, `{"outcome":"rejected"}`, or `{"outcome":"cancelled"}`. The bridge only forwards permission decisions and cannot extend authorization. The host answers each request according to the user's existing authorization, and when that does not settle it, asks the user and waits.
 
-A `queued` result from `send` / `answer` only means the input was queued; keep reading until an `input_delivered` or `input_rejected` event confirms the outcome. Answers handed to the host plugin through the file channel first show `input_forwarded` (handed over, waiting to be consumed); keep waiting past it for `input_delivered` or `input_rejected`. Request IDs differ from job IDs; answer only current requests of the job at hand. While a job waits for an answer it is waiting, not stalled; keep the process session managed.
+A `queued` result from `send` / `answer` only means the input was queued; keep reading until an `input_delivered` (sent to dsh) or `input_rejected` event confirms the outcome. When dsh withdraws a question, a `request_cancelled` event appears and the request leaves `pendingRequests`. Request IDs differ from job IDs; answer only current requests of the job at hand. While a job waits for an answer it is waiting, not stalled; keep the process session managed.
 
 ## Review and rework
 
