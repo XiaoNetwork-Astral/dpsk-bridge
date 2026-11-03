@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { COMMANDS, parse, parseCommand, rootHelp, commandHelp } from '../lib/cli.mjs';
 
 const dsbBin = fileURLToPath(new URL('../bin/dsb.mjs', import.meta.url));
+const dshVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).dshVersion;
 const ID = '11111111-1111-1111-1111-111111111111';
 const removedExperimentalOption = '--notify-cmd';
 
@@ -376,7 +377,7 @@ async function runCli(t, report) {
   fs.mkdirSync(path.join(root, 'runtime', 'lib'), { recursive: true });
   const entry = path.join(root, 'runtime', 'lib', 'bin.mjs');
   fs.writeFileSync(entry, cliRuntime(report));
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.2-alpha.3' }));
+  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: dshVersion }));
   const brief = path.join(root, 'brief.md'); fs.writeFileSync(brief, 'cli exit code');
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [dsbBin, 'run', '--brief', brief, '--dsh-entry', entry, '--cwd', root, '--time-limit', '20'], {

@@ -10,6 +10,8 @@ import { runJob, readJob, status, sendMessage, answerRequest, eventsPage, cancel
 import { fake, captureRuntime, setup } from './helpers/fake-dsh.mjs';
 
 const digest = buffer => createHash('sha256').update(buffer).digest('hex');
+const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const escapeRegExp = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const pngBytes = () => Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x49, 0x48, 0x44, 0x52]);
 const jpegBytes = () => Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
 async function deadPid() {
@@ -161,10 +163,11 @@ test('timeout settles a waiting SDK and old installed SDK gives an upgrade error
   await assert.rejects(runJob(options, () => {}, home), /Update/);
 });
 
-test('dsh 0.2.2-alpha.2 is rejected as below the minimum version', async t => {
+test('dsh below the version declared in package.json is rejected', async t => {
   const { options, home, root } = setup(t, 'version gate');
-  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.2.2-alpha.2' }));
-  await assert.rejects(runJob(options, () => {}, home), /Update @deepseek-ai\/dsh to >=0\.2\.2-alpha\.3/);
+  fs.writeFileSync(path.join(root, 'runtime', 'package.json'), JSON.stringify({ version: '0.0.0' }));
+  await assert.rejects(runJob(options, () => {}, home),
+    new RegExp(`Update @deepseek-ai/dsh to >=${escapeRegExp(packageJson.dshVersion)}`));
 });
 
 test('retry preserves the original task and current SDK settings', async t => {

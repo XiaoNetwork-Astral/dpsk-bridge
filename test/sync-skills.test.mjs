@@ -16,16 +16,22 @@ function profile(t) {
   fs.mkdirSync(state, { recursive: true });
   return { home, state };
 }
+// sync-skills.mjs is only a thin call into installer-core.mjs, so redirect the
+// user profile (records and destination roots) on every platform.
 function sync(home) {
   return spawnSync(process.execPath, [syncScript], {
-    encoding: 'utf8', timeout: 120000, env: { ...process.env, USERPROFILE: home },
+    encoding: 'utf8', timeout: 120000,
+    env: {
+      ...process.env, HOME: home, USERPROFILE: home,
+      DPSK_INSTALLER_SKIP_SYSTEM: '1', NO_COLOR: '1', TERM: 'dumb',
+    },
   });
 }
 function assertSkills(root) {
   for (const name of skills) assert.ok(fs.existsSync(path.join(root, name, 'SKILL.md')), path.join(root, name));
 }
 
-test('sync-skills executes against temporary records and handles a known and an unknown preset', { skip: process.platform !== 'win32' }, t => {
+test('sync-skills executes against temporary records and handles a known and an unknown preset', t => {
   const { home, state } = profile(t);
   const claudeRoot = path.join(home, '.claude', 'skills');
   const customRoot = path.join(home, 'custom-host', 'skills');
@@ -43,7 +49,7 @@ test('sync-skills executes against temporary records and handles a known and an 
   assert.ok(fs.existsSync(path.join(state, genericManifests[0].replace(/\.txt$/, '.host.json'))));
 });
 
-test('sync-skills rejects a host record whose skills directory is not absolute', { skip: process.platform !== 'win32' }, t => {
+test('sync-skills rejects a host record whose skills directory is not absolute', t => {
   const { home, state } = profile(t);
   fs.writeFileSync(path.join(state, 'installed-skills.host.json'), JSON.stringify({ target: 'Claude', root: 'relative/skills' }));
   const result = sync(home);

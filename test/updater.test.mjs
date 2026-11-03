@@ -156,9 +156,9 @@ test('updates a real clean checkout by fast-forward and invokes npm through Node
   assert.deepEqual(reservations(f), []);
 });
 
-test('a non-Windows skill-sync warning is returned without failing the update', async t => {
+test('skill-sync warning lines are returned without failing the update', async t => {
   const f = repository(t), base = f.run;
-  const warning = 'WARNING: skills not synchronized (automatic skill synchronization requires Windows). Copy skill/ into your host skill directory.';
+  const warning = 'WARNING: skills not synchronized (simulated)';
   const run = async (command, args, options) => command === process.execPath && args.includes('sync-skills')
     ? { code: 0, stdout: '', stderr: warning } : base(command, args, options);
   const result = await applyUpdate(update, { ...f, run });
