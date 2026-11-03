@@ -1,5 +1,5 @@
 ---
-name: dsh-mcp
+name: deepseek-mcp
 description: Install, import, inspect, update, or remove MCP server patches for DeepSeek Harness (dsh) from any host agent with local command execution, or diagnose missing connections and invalid configuration. Reuse working patches for delegation.
 ---
 

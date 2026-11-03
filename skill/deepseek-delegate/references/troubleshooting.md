@@ -14,7 +14,7 @@ Read this when a call fails, a job makes no progress for a long time, or work ne
 | `cannot read ...: not found` | Check the path and the working directory. A moved file may be located within the authorized scope; if the right target cannot be confirmed, report it as blocked. |
 | exit 126 `path longer than allowed` | Check the length of the working directory. Use an existing short path into the same authorized project, or let the host agent handle it; the repository stays where it is, and the job runs in its own project. |
 | The job fails right away with ENOENT for the brief | The brief file was not on disk yet when `dsb run` started. Confirm the file exists, then start again; no job was created, so this is not a rework. |
-| `invalid config` / MCP fails to start | Use the `dsh-mcp` skill to check the loaded patch, its dependencies, and required environment variables. Keep credentials out of diagnostic output. |
+| `invalid config` / MCP fails to start | Use the `deepseek-mcp` skill to check the loaded patch, its dependencies, and required environment variables. Keep credentials out of diagnostic output. |
 
 ## Confirming that a job ended
 

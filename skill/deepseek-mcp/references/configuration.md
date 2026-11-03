@@ -3,7 +3,7 @@
 Every file keeps the four comment lines below so the delegation skill can discover it cheaply. The template shows stdio and HTTP; use one of them, and check optional fields against `@deepseek-ai/dsh-mcp-client/README.md` of the installed dsh version.
 
 ```yaml
-# dsh-mcp: <name>
+# deepseek-mcp: <name>
 # Purpose: <what this MCP server provides>
 # Requires: <application, service, project, or instance requirements; none if nothing>
 # Usage: dsb run --cwd <project> --brief <file> --patch ~/.dsh/patches/<name>-mcp.yml

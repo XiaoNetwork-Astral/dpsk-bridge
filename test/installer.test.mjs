@@ -17,7 +17,7 @@ test('generic host synchronization backs up files and records only the selected 
   const run = () => spawnSync('powershell.exe', args, { encoding: 'utf8', timeout: 30000, env: { ...process.env, USERPROFILE: root } });
   const first = run(); assert.equal(first.status, 0, first.stdout + first.stderr);
   assert.match(fs.readFileSync(path.join(destination, 'deepseek-delegate', 'SKILL.md'), 'utf8'), /name: deepseek-delegate/);
-  assert.ok(fs.existsSync(path.join(destination, 'dsh-mcp', 'SKILL.md')));
+  assert.ok(fs.existsSync(path.join(destination, 'deepseek-mcp', 'SKILL.md')));
   assert.ok(!fs.existsSync(path.join(root, '.claude', 'skills'))); assert.ok(!fs.existsSync(path.join(root, '.agents', 'skills')));
   const state = path.join(root, '.dpsk-bridge');
   const host = fs.readdirSync(state).find(name => name.endsWith('.host.json'));
