@@ -1,49 +1,50 @@
-# 故障与恢复
+# Troubleshooting
 
-仅在调用失败、长时间没有进展或需要续做时读取。
+Read this only when a call fails, a job makes no progress for a long time, or work needs to be resumed.
 
-| 现象 | 处理 |
+| Symptom | What to do |
 |---|---|
-| 任务等待问题或权限回复 | 读取 `dsb status <ID>` 的 `pendingRequests` 和 `dsb events <ID>`，用 `dsb answer` 回复。只批准已有用户授权覆盖的操作，不能自行决定时向用户澄清；不要关闭沙箱来绕过审批。 |
-| `send` / `answer` 已返回 `queued`，执行没有变化 | 入队不是送达。保存返回的输入 ID，翻页查找对应 `input_delivered` / `input_rejected`，必要时核对请求是否已取消。`input_forwarded`（已转交宿主插件）同样不算送达。追加消息进入下一轮，不打断当前 step。 |
-| 作业停在 `queued` | 检查并发上限（见 SKILL.md“调用与等待”）、同工作区范围冲突和同名 `--resource` 的占用；不能为插队而虚报只读或缩小写入范围。取消和超时包含排队时间。 |
-| Node.js、dsh 或作业版本不受支持 | 更新到 Node.js >=24.9、`@deepseek-ai/dsh` >=0.2.1-rc.3 和当前桥。只支持新版 SDK、v4 会话和当前作业格式；不要与旧版启动器混跑。 |
-| `detected dubious ownership` | 确认是本次授权项目后，在该条 Git 命令使用 `git -c safe.directory='<项目路径>' ...`，不改全局信任配置。 |
-| `cannot modify ...: file has not been read` | 覆盖已有文件前先读取，核对是否有其他进程改动。 |
-| Windows: `ReplaceFileW EIO (Win32 1175)` / 文件占用相关 IO error | 先检查文件当前内容和占用情况。确认是暂时性失败后重试受影响步骤，验收实际写入结果，不盲目重跑整个任务。 |
-| `cannot read ...: not found` | 核对路径与工作目录。可在授权范围内定位已移动的文件；无法确认正确目标时报告阻塞。 |
-| exit 126 `path longer than allowed` | 检查工作目录长度。使用同一授权项目已有的短路径入口，或由主代理处理；不要自行复制、移动仓库或改到其他项目执行。 |
-| `invalid config` / MCP 启动失败 | 使用 `dsh-mcp` skill 检查所加载的 patch、依赖和必需环境变量；不要在诊断输出中打印凭据。 |
+| The job waits for an answer to a question or permission request | Read `pendingRequests` from `dsb status <ID>` and `dsb events <ID>`, then answer with `dsb answer`. Approve only operations the user's existing authorization covers; when you cannot decide, ask the user. Never disable the sandbox to get around an approval. |
+| `send` / `answer` returned `queued` but nothing changes | Queued is not delivered. Keep the returned input ID and page through events for the matching `input_delivered` / `input_rejected`; check whether the request was cancelled if needed. `input_forwarded` (handed to the host plugin) is not delivery either. Follow-ups enter the next turn and do not interrupt the current step. |
+| The job stays `queued` | Check the concurrency limit (see "Calling and waiting" in SKILL.md), scope conflicts in the same workspace, and holders of the same `--resource`. Do not claim read-only or shrink the write scope to jump the queue. Cancellation and timeouts include the queued time. |
+| Unsupported Node.js, dsh, or job version | Update to Node.js >=24.9, `@deepseek-ai/dsh` >=0.2.1-rc.3, and the current bridge. Only the current SDK, v4 sessions, and the current job format are supported; do not mix with old launchers. |
+| `detected dubious ownership` | After confirming this is the authorized project, use `git -c safe.directory='<project path>' ...` for that Git command. Do not change the global trust configuration. |
+| `cannot modify ...: file has not been read` | Read an existing file before overwriting it, and check whether another process changed it. |
+| Windows: `ReplaceFileW EIO (Win32 1175)` or other file-lock IO errors | Check the file's current content and who holds it. Once the failure is confirmed to be temporary, retry the affected step and verify what was actually written; do not blindly rerun the whole task. |
+| `cannot read ...: not found` | Check the path and the working directory. A moved file may be located within the authorized scope; if the right target cannot be confirmed, report it as blocked. |
+| exit 126 `path longer than allowed` | Check the length of the working directory. Use an existing short path into the same authorized project, or let the host agent handle it; do not copy or move the repository, or run in another project. |
+| The job fails right away with ENOENT for the brief | The brief file was not on disk yet when `dsb run` started. Confirm the file exists, then start again; no job was created, so this does not count as a rework. |
+| `invalid config` / MCP fails to start | Use the `dsh-mcp` skill to check the loaded patch, its dependencies, and required environment variables. Never print credentials in diagnostic output. |
 
-## 确认是否结束
+## Confirming that a job ended
 
-先查 `dsb status <ID>` 和宿主的进程会话及退出码；Claude Code 的后台任务和 Codex 的命令会话只是示例。宿主工具返回进程句柄只表示命令仍在运行，不能当作任务完成。保留句柄，用 `dsb wait` 等待，每次返回后处理请求和更新。`dsv` 的“有更新/无更新”只描述日志：五分钟无新日志可能只是长命令在运行或正在等回复，不能用它判定进程是否结束。
+Check `dsb status <ID>` and the host's process session and exit code first; Claude Code background tasks and Codex command sessions are only examples. A process handle returned by the host tool only means the command is still running; it does not mean the task is done. Keep the handle, wait with `dsb wait`, and handle requests and updates after each return. dsv's "Running / No updates" only describes the log: five minutes without new log lines may just be a long command or a pending question, so it cannot tell whether the process ended.
 
-`dsb cancel <ID>` 返回的是取消请求已排队。等作业进入 `cancelled` 后才重派。`cleanup_failed` 表示进程树清理未确认成功，`unknown` 表示启动器意外结束且缺少退出记录；两者都保留调度预约。检查作业记录中的进程和部分成果，确认原任务及相关子进程停止后，才用 `dsb unlock <ID> --confirmed-stopped` 清理本作业的预约，再创建新任务。不要删除别人的预约或仅按超时猜测进程已经退出。
+`dsb cancel <ID>` returns once the cancel request is queued. Re-dispatch only after the job reaches `cancelled`. `cleanup_failed` means cleanup of the process tree was not confirmed, and `unknown` means the launcher ended unexpectedly without an exit record; both keep the scheduling reservation. Check the processes and partial results in the job record, and only after confirming the original task and its child processes stopped, clear this job's reservation with `dsb unlock <ID> --confirmed-stopped` and then create a new task. Never delete other jobs' reservations or assume a process exited because of a timeout.
 
-任务仍在运行时先检查当前进度，再按 SKILL.md 的“双向消息与请求”用 `dsb send` 追加上下文、用 `dsb answer` 回复问题，用 `dsb events` 读取更新。主代理只能转发已经取得的授权，无法判断时向用户澄清。作业结束后不能再发送消息；`dsb retry` 携带原始要求与修复反馈创建新会话。收到 `input_rejected` 后根据具体原因修正，不把入队回执当作执行成功。
+While a job is still running, check its current progress first, then follow "Two-way messages and requests" in SKILL.md: add context with `dsb send`, answer questions with `dsb answer`, and read updates with `dsb events`. The host agent can only forward authorization it already has; when unsure, ask the user. After the job ends, no more messages can be sent; `dsb retry` creates a new session carrying the original brief and the fix feedback. On `input_rejected`, correct the specific cause; a queued receipt is not success.
 
-## 从部分成果续做
+## Resuming from partial results
 
-确认旧任务结束，检查现有改动与派单前基线，保留已验证的成果。新的 brief 应包含必要的原始目标、限制及验收条件，并加上：
+Confirm the old job ended, compare the existing changes with the pre-dispatch baseline, and keep the verified results. The new brief should restate the necessary original goal, limits, and acceptance criteria, and add:
 
 ```text
-【续做】上次任务已结束，原因：<实际退出/取消/失败原因>。
-已确认完成：<成果与证据>。待处理：<失败或未完成部分>。
-相关改动/日志：<路径>。其中已有用户改动：<需要保留的内容>。
-先核对当前状态，再补齐剩余工作；不要推倒重来，不重复已完成的外部操作。
+[Resume] The previous job has ended. Reason: <actual exit/cancel/failure reason>.
+Confirmed done: <results and evidence>. Still to do: <failed or unfinished parts>.
+Related changes/logs: <paths>. Existing user changes among them: <what must be kept>.
+Check the current state first, then finish the remaining work; do not start over or repeat external actions that already succeeded.
 ```
 
-外部应用操作超时且结果不明确时，先只读查询其当前状态，再决定是否重试。无法确认执行结果时报告不确定性，不通过重复操作猜测成功与否。
+When an operation on an external application timed out and its outcome is unclear, query its current state read-only first, then decide whether to retry. When the outcome cannot be confirmed, report the uncertainty instead of guessing by repeating the operation.
 
-## dsb 不在 PATH 中
+## dsb is not on PATH
 
-先确认是否只是 PATH 尚未更新；任意宿主都可以用 `node "<dpsk-bridge 仓库>/bin/dsb.mjs" ...` 调用同一桥。确认依赖已安装，并使用当前版本的 `run` / `send` / `answer` / `events`；不能控制进程生命周期时先恢复宿主的执行能力，不以丢弃句柄或无限等待替代。
+First check whether PATH just has not been refreshed. Any host can call the same bridge with `node "<dpsk-bridge repo>/bin/dsb.mjs" ...`. Make sure dependencies are installed and use the current `run` / `send` / `answer` / `events`. If you cannot control the process lifecycle, restore the host's ability to run commands first; do not drop the handle or wait forever instead.
 
-## 查看器与更新
+## Viewer and updates
 
-`dsv` 读取 v4 明文或 zstd 会话日志；找不到会话时核对 `DSH_HOME` 和 `DSH_SESSIONS_ROOT`。并发运行时用作业记录中的会话 ID 对应查看，不将其他会话的 `latest` 当作本次报告。残缺尾部可能只是仍在写入；查看器显示完整前缀，不能据此判定作业结束。
+`dsv` reads v4 plain or zstd session logs; when no sessions are found, check `DSH_HOME` and `DSH_SESSIONS_ROOT`. With concurrent jobs, open the session by the ID in the job record instead of treating another session's `latest` as this job's report. An incomplete tail may just still be being written; the viewer shows everything before it, which does not mean the job ended.
 
-`dsv update --check` 立即检查 GitHub Releases，TUI 发布结果缓存 6 小时；`dsv update` 或 TUI 中按 `u` 安装正式更新。`dsv update --auto on|off` 控制自动更新，默认关闭。更新会等桥作业完成后独占执行，排队最多等待 60 秒，繁忙时稍后重试；TUI 在更新期间暂缓退出。有本地改动或分叉时不自动覆盖，先保存改动并由宿主检查差异。网络或发布检查失败不表示没有新版本，不要清理工作区来强行更新。
+`dsv update --check` checks GitHub Releases right away; the TUI caches release results for 6 hours. `dsv update`, or `u` in the TUI, installs a release. `dsv update --auto on|off` controls automatic updates, which are off by default. An update waits for bridge jobs to finish and then runs exclusively, queueing for at most 60 seconds and trying again later when busy; the TUI delays quitting while an update runs. With local changes or diverged history it does not overwrite anything; save the changes first and let the host check the diff. A failed network or release check does not mean there is no new version; never clean the workspace to force an update.
 
-更新完成后重新打开 `dsv`，并在宿主刷新已安装的 skills，避免继续使用旧指令。自动技能同步脚本当前要求 Windows，其他平台手动复制 `skill/` 内容到宿主技能目录。
+After an update, reopen `dsv` and refresh the installed skills in the host so it does not keep using old instructions. The automatic skill sync script currently requires Windows; on other platforms, copy the contents of `skill/` to the host's skills directory by hand.

@@ -3,46 +3,46 @@ name: dsh-mcp
 description: Install, import, inspect, update, or remove MCP server patches for DeepSeek Harness (dsh) from any host agent with local command execution, or diagnose missing connections and invalid configuration. Reuse working patches for delegation.
 ---
 
-# 管理 dsh 的 MCP
+# Managing MCP for dsh
 
-供具备本地命令执行能力的任意宿主代理使用，Claude Code 和 Codex 是示例。要求 Node.js >=24.9、`@deepseek-ai/dsh` >=0.2.1-rc.3 和当前 dpsk-bridge。一个 MCP server 对应 `~/.dsh/patches/<name>-mcp.yml`，通过 SDK 双向会话的 `dsb run --patch <文件>` 按需加载，可重复此参数。宿主可用的 MCP 不会自动出现在 dsh 中；只加载本任务需要的 server，避免额外工具定义和启动开销。
+For any host agent that can run local commands; Claude Code and Codex are examples. Requires Node.js >=24.9, `@deepseek-ai/dsh` >=0.2.1-rc.3, and the current dpsk-bridge. Each MCP server has one file, `~/.dsh/patches/<name>-mcp.yml`, loaded on demand into a bidirectional SDK session with `dsb run --patch <file>` (repeatable). MCP servers available to the host do not appear in dsh automatically; load only the servers this task needs to avoid extra tool definitions and startup cost.
 
-## 列出与复用
+## Listing and reuse
 
-读取 patch 的前 4 行即可了解名称、用途、前提和用法。在 Bash 中可用 `head -n 4 ~/.dsh/patches/*-mcp.yml`；PowerShell 中用 `Get-ChildItem -Path ~/.dsh/patches -Filter '*-mcp.yml' | ForEach-Object { Get-Content -LiteralPath $_.FullName -TotalCount 4 }`。按实际 shell 选择命令。
+The first 4 lines of a patch give its name, purpose, prerequisites, and usage. In Bash: `head -n 4 ~/.dsh/patches/*-mcp.yml`; in PowerShell: `Get-ChildItem -Path ~/.dsh/patches -Filter '*-mcp.yml' | ForEach-Object { Get-Content -LiteralPath $_.FullName -TotalCount 4 }`. Pick the command for the shell you actually have. Older patches may use the Chinese header keys `用途` (purpose), `前提` (requires), and `用法` (usage); they mean the same.
 
-没有匹配文件只表示尚未配置。列出配置时不读取或打印整个凭据环境。配置没有变化、验证结果可用且运行前提满足时，直接复用，不为每次委派重新安装或测试。
+No matching file only means nothing is configured yet. When listing configurations, never read or print the whole credential environment. When a configuration has not changed, its verification result is still valid, and its prerequisites are met, reuse it directly instead of reinstalling or retesting for every delegation.
 
-## 安装或导入
+## Installing or importing
 
-1. 从用户现有配置或 server 官方说明确定启动方式和依赖。只导入指定 server，不复制整个客户端配置。
-2. 按 [patch 模板与字段映射](references/configuration.md) 写配置；只有安装、更新或排错需要读取该参考。
-3. 检查命令、依赖、目标应用/实例及必需环境变量是否就绪。检查变量只报告名称和是否设置，不显示值。保留与本次目标匹配的项目参数；目标不明确时先澄清，不擅自删除项目绑定。
-4. 进行下面的验证，报告 patch 路径、使用方法、前提及需要用户设置的变量。
+1. Determine the launch method and dependencies from the user's existing configuration or the server's official instructions. Import only the requested server; do not copy the whole client configuration.
+2. Write the configuration following [Patch template and field mapping](references/configuration.md); read that reference only for installs, updates, or troubleshooting.
+3. Check that the command, dependencies, target application/instance, and required environment variables are ready. Report only the names of variables and whether they are set, never their values. Keep project arguments that match this goal; when the target is unclear, ask first instead of removing project bindings.
+4. Run the verification below and report the patch path, how to use it, its prerequisites, and the variables the user must set.
 
-有凭据的字段使用环境变量引用，不写入明文。`?? ''` 只避免 undefined 导致配置解析失败，不代表空凭据能通过认证；必需凭据未设置时先报告缺失，不反复启动模型尝试。
+Fields that hold credentials use environment variable references, never plain text. `?? ''` only keeps an undefined value from breaking config parsing; it does not mean an empty credential will authenticate. When a required credential is missing, report it first instead of starting model attempts over and over.
 
-## 用最少调用验证
+## Verify with as few calls as possible
 
-先用 `dsh --profile sdk --patch <文件> --dump-config` 在本地验证配置可以组合，只报告是否成功和相关的脱敏错误，不将整份配置输出到对话。
+First check locally that the configuration composes with `dsh --profile sdk --patch <file> --dump-config`. Report only whether it succeeded and any relevant redacted error; never put the full configuration into the conversation.
 
-再验证连接与工具注册。如果已有无需模型调用的 MCP 客户端或探测工具，优先复用它。否则通过一次有超时上限的 `dsb run --patch <文件>`，让 dsh 确认指定前缀工具存在，并调用一个与目标匹配、无需额外外部动作的只读工具；返回工具名和简短结果证据。默认路由为 `deepseek-official` / `deepseek-flash`，可用 `--provider` / `--model` 或 `DPSK_PROVIDER` / `DPSK_MODEL` 覆盖。前提未满足时不调用，不能拿模型列出的名称代替真实调用结果。
+Then verify the connection and tool registration. If an MCP client or probe that needs no model call already exists, reuse it. Otherwise use one `dsb run --patch <file>` with a bounded timeout and have dsh confirm the tools with the expected prefix exist and call one read-only tool that matches the target and needs no further external action; it returns the tool name and short evidence of the result. The default route is `deepseek-official` / `deepseek-flash`; override with `--provider` / `--model` or `DPSK_PROVIDER` / `DPSK_MODEL`. Do not call when the prerequisites are not met, and never accept tool names listed by the model in place of a real call.
 
-验证中保留宿主进程会话，按 `deepseek-delegate` skill 用 `dsb wait` 等待，返回后读取 `dsb events <ID>` 和 `dsb status <ID>` 的 `pendingRequests`。使用 `dsb answer` 回复问题或权限请求，只有现有用户授权覆盖操作时才能批准；不能自行决定时向用户澄清。入队不等于送达，按 `deepseek-delegate` skill 的“双向消息与请求”核对 `input_delivered` / `input_rejected`（`input_forwarded` 不算送达）。共享同一应用或 MCP 实例的并发作业应使用相同 `--resource <名称>`；只读声明和资源预约不能替代应用权限或沙箱。
+During verification, keep the host's process session and wait with `dsb wait` as the `deepseek-delegate` skill describes; after it returns, read `dsb events <ID>` and `pendingRequests` from `dsb status <ID>`. Answer questions or permission requests with `dsb answer`, and approve only operations covered by the user's existing authorization; when you cannot decide, ask the user. Queued is not delivered: check `input_delivered` / `input_rejected` as described in "Two-way messages and requests" of the `deepseek-delegate` skill (`input_forwarded` is not delivery). Concurrent jobs that share one application or MCP instance should use the same `--resource <name>`; read-only declarations and resource reservations do not replace application permissions or a sandbox.
 
-一次验证同时覆盖发现与只读调用，不分成两次付费模型调用。工具错误、无工具、权限不足分别报告；未经实际调用验证时明确说明，不能标记为已验证。将验证时间、server/patch 版本及简短结果记在 patch 的额外注释中（不改变前四行）；后续配置或依赖发生变化时再验证。
+One verification covers both discovery and the read-only call; do not split it into two paid model calls. Report tool errors, missing tools, and missing permissions separately; when something was not verified by a real call, say so and never mark it verified. Record the verification time, server/patch version, and a short result in an extra comment in the patch (without changing the first four lines); verify again when the configuration or dependencies change later.
 
-## 更新与卸载
+## Updating and removing
 
-更新前检查现有 patch；只改所需字段，保留用户设置。尽量保持 `serverName`，它决定工具名称前缀。更新后重新验证。
+Before updating, read the existing patch; change only the fields that need it and keep the user's settings. Keep `serverName` where possible, since it sets the tool name prefix. Verify again after the update.
 
-用户明确要求卸载指定 MCP 时，检查该 patch、备份后删除，并用宿主可用的搜索方式（如 `rg`、`grep` 或宿主自带的代码搜索）检查当前相关项目的引用，提醒需要调整的 brief。对象不明确时再询问，不重复请求已经给出的卸载授权。不顺带卸载 npm/uv 包、删除凭据或终止共享服务。
+When the user explicitly asks to remove a specific MCP server, check that patch, back it up, delete it, and search the related projects for references with whatever the host offers (such as `rg`, `grep`, or the host's own code search), then point out briefs that need adjusting. Ask only when the target is unclear, and do not ask again for removal permission already given. Do not also uninstall npm/uv packages, delete credentials, or stop shared services.
 
-## 常见问题
+## Common problems
 
-- `invalid config`：检查字段类型、未设置环境变量，以及 patch 是否只加载了本任务需要的 server。
-- 启动失败：检查启动命令、依赖、应用是否打开、端口或 URL。
-- 连接成功但没有工具：读取 server 的相关错误日志，不让模型反复猜工具名。
-- 单次工具超时：先只读检查操作结果，尤其是有状态的编辑器；不要盲目重复可能已完成的操作。
+- `invalid config`: check field types, unset environment variables, and whether the patch loads only the servers this task needs.
+- Startup failure: check the launch command, dependencies, whether the application is open, and the port or URL.
+- Connected but no tools: read the server's relevant error log instead of letting the model guess tool names.
+- A single tool call times out: check the outcome read-only first, especially for stateful editors; do not blindly repeat an operation that may already have completed.
 
-如需固定组合可以建立自定义 profile；一般优先复用按需 patch。
+A custom profile can pin a fixed combination; usually prefer reusing on-demand patches.

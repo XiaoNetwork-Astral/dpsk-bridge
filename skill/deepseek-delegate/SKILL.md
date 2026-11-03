@@ -3,125 +3,125 @@ name: deepseek-delegate
 description: Delegate bounded coding, investigation, batch processing, or MCP tasks from any host agent with local command execution to DeepSeek Harness (dsh), with bidirectional updates and coordinated concurrency. Consider before extensive source reading, or when the user asks to use DeepSeek or a cheaper model.
 ---
 
-# DeepSeek 委派（dpsk-bridge）
+# DeepSeek delegation (dpsk-bridge)
 
-供具备本地命令执行能力的任意宿主代理使用，Claude Code 和 Codex 是示例。主代理负责理解用户目标、确定边界、回复执行中的问题并验收；dsh 自行调查、实现并验证。dpsk-bridge 使用 SDK 双向会话，按需加载 MCP。要求 Node.js >=24.9、`@deepseek-ai/dsh` >=0.2.1-rc.3；先更新到要求版本，不使用旧启动方式或旧作业记录。
+For any host agent that can run local commands; Claude Code and Codex are examples. The host agent understands the user's goal, sets the boundaries, answers questions during the run, and reviews the result; dsh investigates, implements, and verifies on its own. dpsk-bridge uses bidirectional SDK sessions and loads MCP servers on demand. Requires Node.js >=24.9 and `@deepseek-ai/dsh` >=0.2.1-rc.3; update to these versions first and do not use the old launch path or old job records.
 
-## 何时委派
+## When to delegate
 
-在大量阅读源码或写详细实现之前判断。只要目标可传递、范围明确且可验收，就优先委派能独立推进的工作；不要为了准备 brief，先把待委派的调查或代码生成做完。暂时不适合整体委派的任务，仍可交出有边界的调查、验证或机械步骤。
+Decide before reading a lot of source or writing a detailed implementation. When the goal can be handed over, the scope is clear, and the result can be checked, prefer delegating work that can proceed on its own; do not finish the investigation or code generation yourself just to prepare the brief. A task that cannot be delegated as a whole can still hand off a bounded investigation, verification, or mechanical step.
 
-| 适合交给 dsh | 主代理保留的工作 |
+| Good for dsh | Kept by the host agent |
 |---|---|
-| 定位相关文件、梳理调用关系、批量扫描日志，返回带位置的结论 | 澄清需求、跨模块取舍，以及对调查结论作最终判断 |
-| 按目标和现有约定实现一个功能或修复，连同相关测试 | 需要持续讨论的设计、涉及关键安全或数据完整性的决定 |
-| 批量转换、机械修改、运行已知验证流程、范围明确的 MCP 操作 | 一两行即可完成的小改动，派单和验收成本更高的任务，以及已有界面代码的调整 |
+| Locating relevant files, tracing call paths, scanning logs in bulk, and returning conclusions with locations | Clarifying requirements, cross-module trade-offs, and the final judgment on investigation results |
+| Implementing a feature or fix following the goal and existing conventions, together with the relevant tests | Designs that need ongoing discussion; decisions that affect security or data integrity |
+| Batch conversions, mechanical edits, running a known verification procedure, well-scoped MCP operations | Changes of one or two lines where dispatch and review cost more, and adjustments to existing UI code |
 
-不要求已有计划、完整代码或额外插件。已有规格就引用；没有规格就给出可观察的完成条件。难题也可以先委派有边界的证据收集，再由主代理决定下一步。
+No existing plan, finished code, or extra plugin is required. Reference a specification if there is one; otherwise give observable completion criteria. Hard problems can start with a bounded evidence-gathering task, after which the host agent decides the next step.
 
-提示词工程（写或改 skill、系统提示、brief 模板等）和整理、改写文档这类工作，由主代理亲自做，不派给 dsh。这类改动很容易在局部看着没问题、整体却前后矛盾、内容重复或表述混乱，需要有人通读全文把关。
+Prompt engineering (writing or changing skills, system prompts, brief templates) and organizing or rewriting documentation are done by the host agent itself, not by dsh. Such changes easily look fine locally while the whole becomes inconsistent, repetitive, or confusing; someone has to read the full text.
 
-一次围绕一个可验收的目标组织任务。共享上下文的实现、测试和直接相关修改可以一起做；不要按计划编号或文件数量机械拆分。跨多个独立目标、约束复杂或需要中途决策时再拆分。并行任务应有独立的写入范围，主代理也不要同时修改 dsh 正在处理的文件或 MCP 对象。
+Organize each task around one goal that can be accepted. Implementation, tests, and directly related changes that share context can go together; do not split mechanically by plan item or file count. Split when there are several independent goals, complex constraints, or decisions needed midway. Parallel tasks need separate write scopes, and the host agent must not edit files or MCP objects that dsh is working on at the same time.
 
-## 写简短且自包含的 brief
+## Write a short, self-contained brief
 
-每次 `dsb run` 或 `retry` 都是新会话，看不到主代理的对话。只传目标、必要上下文、边界和验收方式；现有规格或大段材料给路径，让 dsh 自己读取，不复制完整对话、源码或实现步骤。传递已确认适用的 `AGENTS.md`、`CLAUDE.md` 等约定路径，并在 brief 中写清影响本任务的硬性限制与用户决定；不要假定 dsh 自动继承宿主的指令、插件、MCP 配置或权限。
+Every `dsb run` or `retry` starts a new session that cannot see the host agent's conversation. Pass only the goal, the necessary context, the boundaries, and how to verify. Point to existing specifications and large materials by path and let dsh read them; do not copy the whole conversation, source code, or implementation steps. Pass the paths of applicable conventions such as `AGENTS.md` or `CLAUDE.md`, and state the hard limits and user decisions that affect this task in the brief; do not assume dsh inherits the host's instructions, plugins, MCP configuration, or permissions.
+
+Write the brief in English. The bridge appends a report contract to every brief that asks dsh to use standard English for its reports, progress updates, and questions; files it creates or edits still follow the project's own language and conventions.
 
 ```text
-【目标】用户需要的行为或调查结论，以及完成条件。
-【上下文】项目根目录；已知的相关入口或参考文件；必须遵守的项目约定。
-【范围】可修改的模块/目录或 MCP 对象；应保留的行为和已有改动；任务特有的限制。
-【验收】相关测试/验证命令或可观察结果；未知时让 dsh 查找并说明采用的验证方法。
-【报告】第一行 RESULT: OK|FAIL|BLOCKED。
-随后简述结论、改动文件/证据位置、验证命令与退出码、未验证项或阻塞原因。
-默认控制在约 15 行，详细结果或长日志写文件并给路径；不要粘贴整份源码或执行过程。
+[Goal] The behavior or finding the user needs, and when it counts as done.
+[Context] Project root; known entry points or reference files; project conventions that must be followed.
+[Scope] Modules/directories or MCP objects that may change; behavior and existing changes to keep; task-specific limits.
+[Acceptance] Relevant tests/verification commands or observable results; if unknown, let dsh find them and state the method it used.
+[Report] First line RESULT: OK|FAIL|BLOCKED.
+Then briefly: conclusion, changed files/evidence locations, verification commands and exit codes, anything unverified or blocking.
+Keep it to about 15 lines; put detailed results or long logs in a file and give the path. Do not paste whole source files or the run.
 ```
 
-按任务删去无用字段。`OK` 表示约定的验收条件已满足，`FAIL` 表示实现或验证失败，`BLOCKED` 表示缺少必要权限、依赖或决定；未运行的验证应明确注明，不能报告为通过。
+Drop fields that do not apply. `OK` means the agreed acceptance criteria are met, `FAIL` means implementation or verification failed, and `BLOCKED` means a required permission, dependency, or decision is missing; verification that was not run must be stated and never reported as passed.
 
-派单前只做必要的轻量检查：根目录和已给出的入口是否存在、约束与验收是否冲突、工作区有哪些已有改动。缺少精确文件列表时可以给模块范围，由 dsh 定位。实现细节允许自行选择；目标冲突、必须扩大范围或权限不足时返回阻塞原因。
+Before dispatching, do only light checks: the root and any named entry points exist, constraints and acceptance do not conflict, and which changes already exist in the workspace. Without an exact file list, a module scope is enough and dsh locates the files. Implementation details are dsh's choice; it returns a blocking reason when goals conflict, the scope must grow, or permissions are missing.
 
-委派不扩大用户授权。默认不让 dsh 提交、推送、发布或执行与任务无关的删除和依赖安装。使用 MCP 时明确目标实例、可执行操作和保存要求；有状态应用只恢复临时设置，保留任务要求的成果。brief 中的限制是任务约定，不能替代实际沙箱和 MCP 权限。
+Delegation does not extend the user's authorization. By default dsh does not commit, push, publish, or perform deletions or dependency installs unrelated to the task. When using MCP, name the target instance, the allowed operations, and what must be saved; for stateful applications, restore only temporary settings and keep the results the task requires. Limits in the brief are task agreements and do not replace the actual sandbox and MCP permissions.
 
-## 调用与等待
+## Calling and waiting
 
-将 brief 以 UTF-8 写到项目内适合放任务材料的位置。使用本包的 `dsb` 启动器：它保存原始要求、Git 状态基线、报告和退出码，并协调并发。`run` / `retry` 持续运行直到作业结束，由宿主保留进程会话并服务双向请求。
+Write the brief as UTF-8 to a suitable place for task material inside the project, and make sure the file exists before starting `dsb run`. Use this package's `dsb` launcher: it stores the original brief, a Git baseline, the report, and the exit code, and coordinates concurrency. `run` / `retry` keep running until the job ends; the host keeps the process session and serves the bidirectional requests.
 
-下表中的宿主名只是示例，不是额外要求；未列出的宿主按“任意宿主”一行处理，参数名以你实际拥有的工具为准，不要把某个宿主的参数传给另一个宿主。
+The host names below are examples, not extra requirements. A host that is not listed follows the "Any host" row. Parameter names come from the tools you actually have; never pass one host's parameters to another.
 
-| 宿主 | 启动与等待 |
+| Host | Start and wait |
 |---|---|
-| 任意宿主 | 使用实际可用的后台命令或进程会话接口，保存句柄，等待并读取更新，同时检查问题和权限请求；等待统一用下文的 `dsb wait`，不要自己循环查询。 |
-| Claude Code | 示例：若 Bash 工具支持 `run_in_background: true`，用它启动并记录后台任务 ID；没有该参数时按“任意宿主”一行处理。执行中读取桥接事件并回复请求，结束后读取结果。 |
-| Codex | 用当前可用的命令执行工具运行。若提供 `exec_command` / `write_stdin`，设置有界 `yield_time_ms`，保存返回的 `session_id`，再用 `write_stdin` 等待和读取后续结果；各宿主参数名不同，不要混用。 |
+| Any host | Use the available background command or process session interface, keep the handle, wait and read updates, and check for questions and permission requests. Always wait with `dsb wait` (below); do not poll in your own loop. |
+| Claude Code | Example: if the Bash tool supports `run_in_background: true`, start with it and record the background task ID; otherwise follow the "Any host" row. Read bridge events and answer requests during the run, and read the result at the end. |
+| Codex | Run with the available command execution tool. If it offers `exec_command` / `write_stdin`, set a bounded `yield_time_ms`, keep the returned `session_id`, and wait for and read later output with `write_stdin`. Parameter names differ between hosts; do not mix them. |
 
-同时记录 `dsb` 输出的完整作业 ID；它不同于宿主的会话 ID。以当前工具实际支持的接口为准，不能丢弃进程句柄、创建无人管理的进程或无限等待。执行需要的文件、网络或子进程权限通过宿主现有授权流程处理。
+The host's background task list shows both the host agent's own commands and dsh jobs. When starting `dsb run` / `dsb retry`, if the host lets you name or describe the background command, start it with `[dpsk-bridge]` (for example `[dpsk-bridge] Investigate the login failure`) so the user can tell at a glance what dsh is doing; if the host has no such field, skip this. The prefix belongs only in the host's task description, not in the brief.
 
-宿主的后台任务列表会同时显示主代理自己的后台命令和 dsh 作业。启动 `dsb run` / `dsb retry` 时，如果宿主允许给后台命令填写描述或名称，就以 `[dpsk-bridge]` 开头（例如 `[dpsk-bridge] 调查登录失败原因`），让用户一眼分清哪些是 dsh 在做；宿主没有这类字段时不用处理。
+If your command tool cannot return output while the command is still running, you cannot answer questions or approvals mid-run. Set `--timeout` to an acceptable upper limit and read the result with `dsb result <ID>` afterwards; such hosts should only dispatch tasks that need no decisions midway. If a question causes a timeout, dispatch again with `dsb retry`. That re-dispatch only resumes work interrupted by the question; it does not count as the one rework allowed after a failed review ("Review and rework").
 
-如果你的命令工具不能在命令运行期间返回输出，就无法在作业进行中回复提问或审批。这时把 `--timeout` 设为可接受的上限，结束后用 `dsb result <ID>` 读取结果；这类宿主只适合派不需要中途决策的任务，遇到提问导致超时时，用 `dsb retry` 重新派单。这次重新派单只是补回被提问打断的工作，不算“验收与返工”里验收失败后的那一次返工。
+If the host cannot wake the main agent when a background command ends, do not poll `status` or `events` in a loop; every query is a paid call. Put `dsb run` in the background or a process session and wait with `dsb wait <ID> --timeout <seconds>`: it only reads local files, returns once when the job ends, a question or approval needs an answer, or the timeout passes, and makes no model call while waiting. `--timeout` defaults to 600, ranges 1–3600, and must not exceed what the host allows for a single command. Act on the returned `reason`: on `timeout`, wait again; on `request`, handle it with `dsb events` and `dsb answer` first (`actionableRequests` lists requests not yet answered; answered ones do not return again); on `finished`, read the result, and for `cleanup_failed` deal with leftover processes per the troubleshooting guide first; `unknown` means the launcher ended unexpectedly, so confirm the process state per the troubleshooting guide instead of re-dispatching. A `wait` return only says what happened; it does not mean the task succeeded.
 
-宿主没有“后台命令结束时自动唤醒主代理”的能力时，不要循环反复查询 `status` 或 `events`，每次查询都是一次付费调用。把 `dsb run` 放到后台或进程会话里，再用 `dsb wait <ID> --timeout <秒>` 等待：它只在本地读文件，作业结束、出现待回复的问题或审批、或超时才返回一次，等待期间不调用模型。`--timeout` 默认 600、范围 1–3600，且不能超过宿主单次命令允许的时长。按返回的 `reason` 处理：`timeout` 就再等一次；`request` 先用 `dsb events` 和 `dsb answer` 处理（`actionableRequests` 是尚未回复的请求，已回复的不会重复返回）；`finished` 后读取结果，其中 `cleanup_failed` 要先按故障文档处理遗留进程；`unknown` 说明启动器意外结束，按故障文档确认进程状态，不要直接重派。`wait` 的返回只说明发生了什么，不代表任务成功。
+`dsb run` / `retry` also accept `--notify-cmd <command>` (dsb runs the command when the job ends or a new question appears, to wake the host). It has not been verified on any real host. **Do not use it for now**, and do not configure it for the user, until this skill explicitly allows it.
 
-`dsb run` / `retry` 还有 `--notify-cmd <命令>` 选项（作业结束或出现新问题时由 dsb 执行该命令，用来唤醒宿主）。它还没有在任何真实宿主上验证，**目前不要使用**，也不要替用户配置；等本 skill 明确放开后再用。
-
-示例（`2700` 秒为示例上限，按任务调整；需要 MCP 时重复添加 `--patch <文件>`）：
+Example (`2700` seconds is an example limit; adjust per task; repeat `--patch <file>` when MCP is needed):
 
 ```text
-dsb run --cwd "<项目目录>" --brief "<brief 文件>" --timeout 2700
+dsb run --cwd "<project dir>" --brief "<brief file>" --timeout 2700
 ```
 
-默认 provider/model 为 `deepseek-official` / `deepseek-flash`；用 `--provider`、`--model` 或 `DPSK_PROVIDER`、`DPSK_MODEL` 覆盖，明确保留用户指定的路由。
+The default provider/model is `deepseek-official` / `deepseek-flash`; override with `--provider`, `--model`, or `DPSK_PROVIDER`, `DPSK_MODEL`, and keep any route the user specified.
 
-需要让 dsh 看图时重复传 `--image <文件>`：仅支持 JPEG、PNG、GIF、WebP（按文件内容判断，不看扩展名），最多 20 张，首次消息连同文字按 base64 编码后不得超过 8 MiB（8388608 字节）。图片只在首次发送时附带，执行中 `dsb send` 的追加消息不能带图片；`retry` 沿用原作业的图片，图片被改动或删除会被拒绝。识图需使用支持图片输入的模型（默认的 `deepseek-flash` 支持）；若用 `--model` 换成不支持图片的模型，dsh 会静默把图片换成文字占位符，主代理必须核对报告确实描述了图片内容，不能只看 `RESULT: OK`。
+To let dsh see images, repeat `--image <file>`: only JPEG, PNG, GIF, and WebP are supported (judged by content, not extension), at most 20 images, and the first message including text must not exceed 8 MiB (8388608 bytes) after base64 encoding. Images are attached to the first message only; follow-up `dsb send` messages cannot carry images. `retry` reuses the original job's images and is refused if they were changed or deleted. Image input needs a model that supports it (the default `deepseek-flash` does); if `--model` switches to a model without image support, dsh silently replaces images with text placeholders, so the host agent must check that the report actually describes the image content and cannot rely on `RESULT: OK`.
 
-- 用 `dsb wait` 等待（上文），每次返回后处理 `dsb events` 和 `status.pendingRequests`；不能只等最终完成通知，否则 dsh 的提问可能无人回复。不要高频轮询 `status` / `events`。完整报告和错误日志留在返回的路径，按需读取相关片段。
-- `dsb status <ID>` 查询进程记录，`dsb result <ID>` 获取短报告。`completed` 仅表示进程退出码为 0；`reportedResult` 是模型自述，`acceptance` 才是主代理记录的验收结果。
-- 共享同一 `DSH_HOME` 的启动器默认并发上限为 8，使用 `DPSK_CONCURRENCY` 或 `--max-concurrent <1..256>` 调整；参与请求取最小上限，提高上限时为全部启动器设置一致值。同一工作区默认写互斥；重复指定 `--scope <路径>` 可让不重叠范围并行，路径相对于 Git 工作区根目录。`--read-only` 任务相互并行，与重叠写任务互斥；它只是协作声明，不会建立沙箱。重复指定 `--resource <名称>` 为跨工作区共享资源加互斥。主代理、IDE 和其他启动方式不受这些预约控制，仍需协调范围。
-- 本地文件系统队列持久保存排队状态；取消及超时覆盖排队阶段。未知状态和 `cleanup_failed` 保留预约，确认进程停止后才解锁。
-- 需要 MCP 时读取 `~/.dsh/patches/*-mcp.yml` 的前 4 行，确认前提并只加载需要的 `--patch <文件>`，可重复此参数。不需要 MCP 就不加载；已有验证结果且配置未变时不要重复安装或做连通性测试。缺少配置时使用同包的 `dsh-mcp` skill。
-- 使用正确的项目根目录；遇到长路径、权限或文件占用问题时，按需读 [故障与恢复](references/troubleshooting.md)，不要临时改变项目范围或关闭沙箱来凑通调用。
+- Wait with `dsb wait` (above) and after each return handle `dsb events` and `status.pendingRequests`; do not wait only for the final completion, or dsh's questions may go unanswered. Do not poll `status` / `events` frequently. The full report and error logs stay at the returned paths; read the relevant parts when needed.
+- `dsb status <ID>` shows the process record and `dsb result <ID>` the short report. `completed` only means the process exit code was 0; `reportedResult` is the model's own claim, and `acceptance` is the review result recorded by the host agent.
+- Launchers that share one `DSH_HOME` run at most 8 jobs at once by default; adjust with `DPSK_CONCURRENCY` or `--max-concurrent <1..256>`. The smallest limit among the participants applies, so when raising it set the same value for every launcher. Write jobs in one workspace are mutually exclusive by default; repeat `--scope <path>` to let non-overlapping scopes run in parallel (paths relative to the Git workspace root). `--read-only` jobs run in parallel with each other and exclude overlapping write jobs; it is a cooperative declaration, not a sandbox. Repeat `--resource <name>` to serialize jobs across workspaces that share a resource. The host agent, IDEs, and other launch methods are not bound by these reservations and still need to coordinate scopes.
+- A local file-system queue persists the queue state; cancellation and timeouts cover the queued phase. `unknown` and `cleanup_failed` keep the reservation, which is released only after confirming the processes stopped.
+- When MCP is needed, read the first 4 lines of `~/.dsh/patches/*-mcp.yml`, check the prerequisites, and load only the needed `--patch <file>` (repeatable). Load nothing when MCP is not needed. When a verification result exists and the configuration has not changed, do not reinstall or retest connectivity. When a configuration is missing, use the `dsh-mcp` skill from the same package.
+- Use the correct project root. For long paths, permissions, or locked files, read [Troubleshooting](references/troubleshooting.md) as needed; do not change the project scope or disable the sandbox to make a call work.
 
-## 双向消息与请求
+## Two-way messages and requests
 
-执行中可补充上下文：将消息写入 UTF-8 文件，运行 `dsb send <ID> --message-file <文件>`。追加消息进入下一轮，不打断当前 step。作业结束后不能再 `send`；需要续做时用 `retry` 创建新会话。
+To add context during the run, write the message to a UTF-8 file and run `dsb send <ID> --message-file <file>`. Follow-ups enter the next turn and do not interrupt the current step. After the job ends, `send` no longer works; use `retry` to continue in a new session.
 
-使用 `dsb events <ID> --after <字节游标> --limit 20` 读取更新，初始游标为 `0`；保存响应的 `cursor`，`more` 为真时继续翻页。`--limit` 默认 20、上限 200，游标是字节位置，不是事件序号。结合 `dsb status <ID>` 的 `pendingRequests`，识别 dsh 的问题和权限请求。
+Read updates with `dsb events <ID> --after <byte cursor> --limit 20`, starting from cursor `0`; keep the returned `cursor`, and call again while `more` is true. `--limit` defaults to 20 with a maximum of 200; the cursor is a byte position, not an event number. Together with `pendingRequests` from `dsb status <ID>`, this shows dsh's questions and permission requests.
 
-将回复写为 JSON 文件，运行 `dsb answer <ID> --request <请求 ID> --answer <JSON 文件>`。普通问题的答案示例：
+Write the answer as a JSON file and run `dsb answer <ID> --request <request ID> --answer <JSON file>`. An answer to an ordinary question looks like this:
 
 ```json
-{"answers":[{"id":"问题 ID","selected":[],"custom":"回复内容"}]}
+{"answers":[{"id":"question ID","selected":[],"custom":"the answer"}]}
 ```
 
-`id` 使用请求中的问题 ID；有选项时按请求填写 `selected`。权限回复为 `{"outcome":"allowed-once"}`、`{"outcome":"rejected"}` 或 `{"outcome":"cancelled"}`。桥只转发权限决定，不能扩大授权；宿主依据已经取得的用户授权回复，不能自行决定时向用户澄清并等待，不能自动批准。
+`id` is the question ID from the request; fill `selected` according to the request when it offers options. Permission answers are `{"outcome":"allowed-once"}`, `{"outcome":"rejected"}`, or `{"outcome":"cancelled"}`. The bridge only forwards permission decisions and cannot extend authorization; the host answers according to the user's existing authorization, and when it cannot decide it asks the user and waits. Never approve automatically.
 
-`send` / `answer` 返回 `queued` 只表示已入队，必须继续读取 `input_delivered` 或 `input_rejected` 事件确认处理结果；通过文件通道转交给宿主插件的回答会先出现 `input_forwarded`（已转交、等待消费），它不等于已送达，仍要继续等 `input_delivered` 或 `input_rejected`。请求 ID 与作业 ID 不同；不要向已过期或其他作业的请求发送回复。主代理在保持进程会话受管理的同时处理这些事件，避免将等待回复误判为停滞。
+A `queued` result from `send` / `answer` only means the input was queued; keep reading until an `input_delivered` or `input_rejected` event confirms the outcome. Answers handed to the host plugin through the file channel first show `input_forwarded` (handed over, waiting to be consumed); that is not delivery, so keep waiting for `input_delivered` or `input_rejected`. Request IDs differ from job IDs; do not answer expired requests or requests of other jobs. While handling these events, keep the process session managed and do not mistake waiting for an answer as a stall.
 
-## 验收与返工
+## Review and rework
 
-先读短报告，再独立核对与验收条件相关的证据。Git 项目比较派单前后的状态与相关 diff；其他项目检查对应文件或 MCP 状态。已有用户改动不能算作 dsh 的产出。
+Read the short report first, then check the evidence that matters for the acceptance criteria yourself. In a Git project, compare the state before and after dispatch and the relevant diff; otherwise check the corresponding files or MCP state. Changes the user had already made do not count as dsh's output.
 
-- 行为修改：检查关键 diff，并运行最小的相关测试或复现检查；只有影响范围或失败证据需要时才扩大验证。
-- 机械转换：核对数量、结构、约束和代表性样本；可确定的规则优先用脚本验证。
-- 调查：抽查报告引用的文件位置与结论，不重复通读整个仓库。
-- 运行测试/构建：核对实际命令、退出码和日志/产物；没有新改动或证据缺口时不无条件重跑整套流程。
-- MCP 操作：用相关只读查询核对最终状态。
+- Behavior changes: check the key diff and run the smallest relevant test or reproduction; widen verification only when the scope of impact or failure evidence calls for it.
+- Mechanical conversions: check counts, structure, constraints, and representative samples; verify deterministic rules with a script where possible.
+- Investigations: spot-check the file locations and conclusions cited in the report; do not reread the whole repository.
+- Running tests/builds: check the actual commands, exit codes, and logs/artifacts; do not rerun the full pipeline unconditionally when nothing changed and there is no evidence gap.
+- MCP operations: check the final state with relevant read-only queries.
 
-验收后执行 `dsb review <ID> --verdict accepted --note "实际验证的证据"`；未通过用 `rework` 或 `blocked`。不要仅凭 `OK` 标记通过。进程失败或报告非 OK 的作业不能标为 accepted；主代理自行修复后的最终结果应单独说明，不算作该次委派通过。
+After acceptance, run `dsb review <ID> --verdict accepted --note "evidence actually checked"`; otherwise use `rework` or `blocked`. Never mark a job accepted on `OK` alone. A job whose process failed or whose report is not OK cannot be accepted; when the host agent fixes the result itself, say so separately, and it does not count as this delegation passing.
 
-小修正由主代理直接处理。返工有明确修复范围时，将具体失败证据写入文件，执行 `dsb retry <ID> --feedback <文件>` 并按同一宿主方式等待；启动器沿用原始目标、工作目录和 MCP 配置，生成关联的新会话。这样让 dsh 修复只做一次，之后按下一段处理。反馈只补充证据和待办；用户改变目标或 MCP 配置变化时，重新准备完整 brief 创建新任务，不通过返工偷偷改变原始范围。
+The host agent handles small corrections directly. When rework has a clear scope, write the specific failure evidence to a file, run `dsb retry <ID> --feedback <file>`, and wait the same way. The launcher keeps the original goal, working directory, and MCP configuration and creates a linked new session. Let dsh fix it once this way, then follow the next paragraph. Feedback only adds evidence and to-dos; when the user changes the goal or the MCP configuration changes, prepare a full new brief and create a new task instead of quietly changing the original scope through rework.
 
-dsh 的工作出现问题时，第一次可以让 dsh 回去继续修复（用 `dsb retry` 并附上具体失败证据）。如果修复回来问题仍然存在，或者更加恶化，就不要再派 dsh 继续修，改由主代理亲自接手修复；不要为了坚持委派而继续消耗。主代理修完后必须自己运行相关测试或验证；问题仍然存在时不再继续改动，停下来把现状、已尝试的做法和失败证据告诉用户，请用户亲自检查，不要在原地反复尝试。续做不会恢复旧会话的全部上下文，仍须指向现有成果和相关证据。
+When dsh's work has problems, the first time you may send it back with `dsb retry` and specific failure evidence. If the problem remains after that fix, or gets worse, do not send dsh again; the host agent takes over the fix. Do not keep spending just to stay with delegation. After fixing, the host agent must run the relevant tests or verification itself; if the problem still remains, stop changing things and tell the user the current state, what was tried, and the failure evidence, and ask the user to look at it. Do not keep retrying in place. Resuming does not restore the old session's full context, so still point to the existing results and the relevant evidence.
 
-UI 类任务（界面、样式、交互、终端界面等）分两种情况。从零实现时，先让 dsh 写初版，写完后由主代理亲自检查。如果初版根本不可用、不是微调能救的（例如整体结构错误、无法运行），可以按上面的通用流程让 dsh 返工一次，因为主代理亲自重写成本过高；能靠微调解决的仍由主代理直接微调。在已有代码上调整界面时，由主代理直接修改，不要再派 dsh。UI 任务里的“自己运行测试”指实际运行或渲染出来看效果和交互，而不只是看代码；主代理微调或修改后效果仍然不对，就停下来请用户亲自查看，不要继续堆叠改动。主代理自己做的微调和修改，在验收记录里单独说明，不算作 dsh 的产出。
+UI tasks (interfaces, styles, interaction, terminal UIs) come in two kinds. When building from scratch, let dsh write the first version and have the host agent check it. If that version is unusable and cannot be saved by small adjustments (for example the overall structure is wrong or it does not run), dsh may rework it once through the general flow above, because a rewrite by the host agent costs too much; anything small adjustments can fix, the host agent fixes directly. When adjusting existing UI code, the host agent changes it directly instead of sending it to dsh. For UI tasks, "run the tests yourself" means actually running or rendering the result and checking how it looks and behaves, not just reading the code; if the host agent's adjustments still do not look right, stop and ask the user to look rather than piling on changes. Note the host agent's own adjustments separately in the review record; they do not count as dsh's output.
 
-确认任务确实退出后才能重派。需要停止时用 `dsb cancel <ID>`，接受取消请求不等于已退出；`unknown` 或 `cleanup_failed` 时先处理遗留进程，不重派。dsv 的“无更新”不能证明中断。中断后的部分改动可能仍然有效，先核对现状再续做，详见 [故障与恢复](references/troubleshooting.md)。
+Re-dispatch only after confirming the job really exited. To stop a job, use `dsb cancel <ID>`; an accepted cancel request does not mean the job exited. For `unknown` or `cleanup_failed`, deal with leftover processes first and do not re-dispatch. dsv's "No updates" does not prove an interruption. Partial changes from an interrupted job may still be valid; check the current state before resuming. See [Troubleshooting](references/troubleshooting.md).
 
-## 按需查看过程
+## Viewing the process on demand
 
-用户可以在真实终端运行 `dsv` 查看 TUI，不增加主代理的上下文。主代理只在报告不足或排查失败时使用 `dsv ls` 和 `dsv show <ID> --no-reasoning`，先限定输出到相关部分。查看器读取 v4 明文或 zstd 日志，可通过 `DSH_SESSIONS_ROOT` 指定会话根目录。并发或有其他会话时按项目、任务和时间确认 ID，不盲用 `latest`。
+The user can run `dsv` in a real terminal to watch the TUI without adding to the host agent's context. The host agent uses `dsv ls` and `dsv show <ID> --no-reasoning` only when the report is not enough or a failure needs investigating, and narrows the output to the relevant part first. The viewer reads v4 plain or zstd logs; `DSH_SESSIONS_ROOT` can point to the session root. With concurrent jobs or other sessions, match the ID by project, task, and time instead of blindly using `latest`.
 
-`dsv update --check` 检查桥的 GitHub Releases，`dsv update`（TUI 中按 `u`）安装正式更新，`dsv update --auto on|off` 控制自动更新，默认关闭。更新会等桥作业完成后独占执行，不覆盖有改动或历史分叉的检出；更新后的处理见 [故障与恢复](references/troubleshooting.md) 的“查看器与更新”。
+`dsv update --check` checks the bridge's GitHub Releases, `dsv update` (or `u` in the TUI) installs a release, and `dsv update --auto on|off` controls automatic updates, which are off by default. Updates wait for bridge jobs to finish and then run exclusively, and never overwrite a checkout with local changes or diverged history; for what to do after an update, see "Viewer and updates" in [Troubleshooting](references/troubleshooting.md).
 
-向用户汇报完成结果、实际验证和剩余限制，说明委派承担的工作。`dsb stats` 汇总任务、返工、验收和已观测会话用量；缺失用量不当作零，父会话用量不冒充完整账单。没有对照用量数据时，不宣称节省了具体金额或比例。
+Report to the user the result, what was actually verified, and the remaining limits, and say what work the delegation took on. `dsb stats` summarizes jobs, rework, reviews, and observed session usage; missing usage is not counted as zero, and parent-session usage does not stand in for a full bill. Without comparable usage data, do not claim a specific saving in money or percentage.
