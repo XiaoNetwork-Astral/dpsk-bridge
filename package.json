@@ -1,6 +1,6 @@
 {
   "name": "dpsk-bridge",
-  "version": "0.5.1",
+  "version": "0.5.0",
   "description": "A host-neutral DeepSeek Harness bridge with bidirectional sessions, concurrent task supervision, and a session viewer.",
   "private": true,
   "license": "LGPL-2.1-only",
