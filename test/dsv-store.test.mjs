@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { createSessionStore, summarizeSession } from '../lib/viewer/store.mjs';
-import { listSessionFiles } from '../lib/sessions.mjs';
+import { createEventReader, listSessionFiles } from '../lib/sessions.mjs';
 import { styler } from '../lib/viewer/text.mjs';
 
 const now = new Date(2026, 0, 15, 12).getTime();
@@ -18,7 +20,15 @@ function temporary(t) {
   return root;
 }
 
-function writeSession(root, id, { title, answer = `ANSWER_${id}`, extra = [], mtime = now } = {}) {
+async function until(check, timeout = 5000) {
+  const end = Date.now() + timeout;
+  while (!check()) {
+    if (Date.now() > end) throw new Error('timed out waiting for the store to refresh');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+}
+
+function writeSession(root, id, { title, answer = `ANSWER_${id}`, extra = [], mtime = now, compressed = false } = {}) {
   const directory = path.join(root, 'project', id);
   fs.mkdirSync(directory, { recursive: true });
   const rows = [{ type: 'session', version: 4, id, cwd: `/work/${id}`, createdAt: now - 1000 },
@@ -27,8 +37,9 @@ function writeSession(root, id, { title, answer = `ANSWER_${id}`, extra = [], mt
     ...extra,
     event('assistant/message', { turn: 1, step: 2, message: { content: text(answer) } }),
     event('turn/end', { turn: 1, reason: { kind: 'completed' } })];
-  const file = path.join(directory, 'session.v4.jsonl');
-  fs.writeFileSync(file, rows.map(JSON.stringify).join('\n') + '\n');
+  const file = path.join(directory, compressed ? 'session.v4.jsonl.zstd' : 'session.v4.jsonl');
+  const body = Buffer.from(rows.map(JSON.stringify).join('\n') + '\n');
+  fs.writeFileSync(file, compressed ? zlib.zstdCompressSync(body) : body);
   fs.utimesSync(file, new Date(mtime), new Date(mtime));
   return file;
 }
@@ -99,10 +110,9 @@ test('small tree tick discovers a new session synchronously and keeps the select
   } finally { store.dispose(); }
 });
 
-test('empty sessions stay hidden and prefix resolution reports ambiguity and misses', async t => {
+test('empty sessions stay hidden from the TUI list', async t => {
   const root = temporary(t);
   writeSession(root, 'match-one', { title: '匹配一' });
-  writeSession(root, 'match-two', { title: '匹配二' });
   const emptyDirectory = path.join(root, 'project', 'empty');
   fs.mkdirSync(emptyDirectory, { recursive: true });
   fs.writeFileSync(path.join(emptyDirectory, 'session.v4.jsonl'),
@@ -110,10 +120,8 @@ test('empty sessions stay hidden and prefix resolution reports ambiguity and mis
   const store = createSessionStore({ root, now: () => now });
   try {
     await store.init();
+    assert.ok(store.sessions(now).some(session => session.id === 'match-one'));
     assert.ok(!store.sessions(now).some(session => session.id === 'empty'));
-    assert.match(store.resolvePrefix('match').error, /several sessions/);
-    assert.match(store.resolvePrefix('missing').error, /No session matches/);
-    assert.equal(store.resolvePrefix('session-match-one').meta.id, 'match-one');
   } finally { store.dispose(); }
 });
 
@@ -133,6 +141,68 @@ test('summarizeSession strips the bridge trailer and counts tool errors consiste
   assert.equal(summary.errors, 1);
   assert.equal(summary.state, 'done');
   assert.equal(summary.logComplete, true);
+  const failed = summarizeSession(meta, [event('turn/start', { turn: 1 }), event('turn/end', { turn: 1, reason: { kind: 'error' } })]);
+  assert.equal(failed.state, 'error');
+  const aborted = summarizeSession(meta, [event('turn/start', { turn: 1 }), event('turn/end', { turn: 1, reason: { kind: 'aborted' } })]);
+  assert.equal(aborted.state, 'aborted');
+});
+
+test('a transient read failure is retried on a later refresh while a limit failure stays terminal', async t => {
+  const root = temporary(t);
+  const file = writeSession(root, 'retry', { title: '重试会话' });
+  let clock = now, attempts = 0;
+  const retryAt = now + 10_000;
+  const createReader = pathName => {
+    const real = createEventReader(pathName);
+    return { read() { attempts++; if (clock < retryAt) throw Object.assign(new Error('EPERM: locked'), { code: 'EPERM' }); return real.read(); } };
+  };
+  const store = createSessionStore({ root, now: () => clock, createReader });
+  try {
+    await store.init();
+    store.dispose();
+    const state = () => store.sessions(clock).find(session => session.id === 'retry').state;
+    assert.equal(state(), 'unreadable');
+    const before = store.stats(file).reads;
+    clock = retryAt + 1;
+    assert.equal(store.tickSync(clock), true);
+    assert.ok(store.stats(file).reads > before);
+    assert.equal(store.stats(file).error, null);
+    assert.equal(state(), 'done');
+    assert.ok(attempts > 0);
+  } finally { store.dispose(); }
+
+  let limitReads = 0;
+  const permanent = createSessionStore({ root, now: () => clock, createReader: () => ({ read() { limitReads++; throw new Error('Session exceeds retained reader limits'); } }) });
+  try {
+    await permanent.init();
+    permanent.dispose();
+    const reads = limitReads;
+    clock += 6000;
+    permanent.tickSync(clock);
+    assert.equal(limitReads, reads, 'a limit error is not retried until the file changes');
+    assert.equal(permanent.sessions(clock).find(session => session.id === 'retry').state, 'unreadable');
+  } finally { permanent.dispose(); }
+});
+
+test('store loads a compressed log through the async reader and rescans a large tree asynchronously', async t => {
+  const root = temporary(t);
+  const large = writeSession(root, 'large', { title: '大日志', answer: crypto.randomBytes(500_000).toString('base64'), mtime: now + 1000, compressed: true });
+  assert.ok(fs.statSync(large).size > 256 * 1024);
+  for (let index = 0; index < 61; index++) writeSession(root, `small-${index}`, { title: `小会话${index}`, mtime: now - index * 1000 });
+  const store = createSessionStore({ root, now: () => now });
+  try {
+    await store.init();
+    assert.equal(store.files.length, 60);
+    const meta = store.files.find(item => item.id === 'large');
+    assert.ok(meta.size > 256 * 1024);
+    const entry = await store.load(meta);
+    assert.ok(entry.events.length >= 3);
+    assert.equal(store.stats(meta.file).error, null);
+    assert.equal(store.sessions(now).find(session => session.id === 'large').state, 'done');
+    writeSession(root, 'newest', { title: '最新会话', mtime: now + 5000 });
+    store.tickSync(now + 3000);
+    await until(() => store.files[0]?.id === 'newest');
+  } finally { store.dispose(); }
 });
 
 test('cache eviction never drops the selected transcript and evicted ones report needsLoad', async t => {

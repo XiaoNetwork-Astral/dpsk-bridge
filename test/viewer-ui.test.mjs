@@ -5,6 +5,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { flushInput, parseInput, runSnapshot } from '../lib/viewer/app.mjs';
+import { show, watch } from '../lib/viewer/cli.mjs';
+import { createSessionStore } from '../lib/viewer/store.mjs';
+import { createEventReader, listSessionFiles } from '../lib/sessions.mjs';
 
 const cli = fileURLToPath(new URL('../bin/dsv.mjs', import.meta.url));
 const plain = text => text.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
@@ -30,6 +34,33 @@ function fixture(t) {
   const dir = path.join(root, 'project', 'reading'); fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'session.v4.jsonl'), events.map(JSON.stringify).join('\n') + '\n');
   return root;
+}
+
+function writeSimpleSession(root, id, { title = `TASK_${id}`, answer = `ANSWER_${id}`, mtime = Date.now() } = {}) {
+  const directory = path.join(root, 'project', id);
+  fs.mkdirSync(directory, { recursive: true });
+  const rows = [{ type: 'session', version: 4, id, cwd: `/work/${id}`, createdAt: mtime - 1000 },
+    { type: 'session/title', seq: 1, time: mtime - 1000, data: { title } },
+    { type: 'turn/start', seq: 2, time: mtime - 1000, data: { turn: 1 } },
+    { type: 'assistant/message', seq: 3, time: mtime - 1000, data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: answer }] } } },
+    { type: 'turn/end', seq: 4, time: mtime - 1000, data: { turn: 1, reason: { kind: 'completed' } } }];
+  const file = path.join(directory, 'session.v4.jsonl');
+  fs.writeFileSync(file, rows.map(JSON.stringify).join('\n') + '\n');
+  fs.utimesSync(file, new Date(mtime), new Date(mtime));
+  return file;
+}
+
+function writeReasonSession(root, id, reason, { title = `TASK_${id}`, mtime = Date.now() } = {}) {
+  const directory = path.join(root, 'project', id);
+  fs.mkdirSync(directory, { recursive: true });
+  const rows = [{ type: 'session', version: 4, id, cwd: `/work/${id}`, createdAt: mtime - 1000 },
+    { type: 'session/title', seq: 1, time: mtime - 1000, data: { title } },
+    { type: 'turn/start', seq: 2, time: mtime - 1000, data: { turn: 1 } },
+    { type: 'turn/end', seq: 3, time: mtime - 1000, data: { turn: 1, reason } }];
+  const file = path.join(directory, 'session.v4.jsonl');
+  fs.writeFileSync(file, rows.map(JSON.stringify).join('\n') + '\n');
+  fs.utimesSync(file, new Date(mtime), new Date(mtime));
+  return file;
 }
 
 test('default CLI shows the answer before a single process summary and hides technical clutter', t => {
@@ -223,7 +254,7 @@ process.argv=['node',${JSON.stringify(cli)},'--no-update-check'];await import(${
 const key=s=>process.stdin.emit('data',Buffer.from(s));
 frames.initial=current;key('z');frames.folded=current;key('Z');frames.opened=current;
 key('n');frames.next1=current;key('n');frames.next2=current;key('n');frames.next3=current;
-key('?');frames.help=current;key('\\x1b[<0;10;5M');frames.helpClick=current;key('\\x1b');frames.helpClosed=current;
+key('?');frames.help=current;key('\\x1b[<0;10;5M');frames.helpClick=current;key('\\x1b');await new Promise(resolve=>setTimeout(resolve,120));frames.helpClosed=current;
 stdout(JSON.stringify(frames));process.exit(0);`;
   const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', env: { ...process.env, DSH_SESSIONS_ROOT: root }, timeout: 15000 });
   assert.equal(output.status, 0, output.stderr);
@@ -267,4 +298,125 @@ stdout(JSON.stringify(frames));process.exit(0);`;
   assert.notEqual(frames.ctrlD, frames.cursor, 'Ctrl+D scrolled');
   assert.deepEqual(highlighted(frames.ctrlD), [], 'the highlight stayed on its block, now off screen');
   assert.ok(highlighted(frames.pageDown).length > 0, 'PgDn brings the highlight onto the new page');
+});
+
+test('split escape sequences wait for the next chunk while a lone Escape is flushed', () => {
+  const arrow = { pending: '' };
+  assert.deepEqual(parseInput('\x1b[', arrow), []);
+  assert.deepEqual(parseInput('A', arrow).map(token => token.key), ['up']);
+  const mouse = { pending: '' };
+  assert.deepEqual(parseInput('\x1b[<0;4', mouse), []);
+  const [event] = parseInput(';10M', mouse);
+  assert.deepEqual(event, { type: 'mouse', button: 0, x: 4, y: 10, press: true });
+  const lone = { pending: '' };
+  assert.deepEqual(parseInput('\x1b', lone), []);
+  assert.deepEqual(flushInput(lone).map(token => token.key), ['escape']);
+  const noContinue = { pending: '' };
+  assert.deepEqual(parseInput('\x1b', noContinue), []);
+  assert.deepEqual(parseInput('A', noContinue).map(token => token.key), ['escape', 'A']);
+});
+
+test('show reports a read error as one line instead of throwing', t => {
+  const root = fixture(t);
+  const errors = [];
+  t.mock.method(console, 'error', (...args) => errors.push(args.join(' ')));
+  t.mock.method(console, 'log', () => {});
+  const previous = process.exitCode;
+  try {
+    show('latest', {}, { root, read: () => { throw Object.assign(new Error('EPERM: locked'), { code: 'EPERM' }); } });
+  } finally { process.exitCode = previous; }
+  assert.deepEqual(errors, ['Could not read the log: EPERM: locked']);
+});
+
+test('error and aborted turn reasons show Failed and Aborted in ls and show', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsv-reasons-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  writeReasonSession(root, 'failed', { kind: 'error', error: { message: 'provider failure' } }, { title: 'FAILED_TASK' });
+  writeReasonSession(root, 'aborted', { kind: 'aborted' }, { title: 'ABORTED_TASK' });
+  const env = { ...process.env, DSH_SESSIONS_ROOT: root };
+  const ls = spawnSync(process.execPath, [cli, 'ls'], { encoding: 'utf8', env });
+  assert.equal(ls.status, 0, ls.stderr);
+  assert.match(ls.stdout, /✗ Failed/); assert.match(ls.stdout, /✗ Aborted/);
+  for (const [id, label] of [['failed', 'Failed'], ['aborted', 'Aborted']]) {
+    const shown = spawnSync(process.execPath, [cli, 'show', id], { encoding: 'utf8', env });
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, new RegExp(`✗ ${label}`));
+  }
+});
+
+test('dsv ls hides empty sessions like the TUI', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsv-empty-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'project', 'empty', 'session.v4.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ type: 'session', version: 4, id: 'empty', cwd: '/work/empty', createdAt: Date.now() }) + '\n');
+  const result = spawnSync(process.execPath, [cli, 'ls'], { encoding: 'utf8', env: { ...process.env, DSH_SESSIONS_ROOT: root } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /EMPTY|Empty/);
+});
+
+test('watch reports a first read failure, keeps polling, and prints an appended event', t => {
+  const root = fixture(t), file = path.join(root, 'project', 'reading', 'session.v4.jsonl');
+  const real = createEventReader(file);
+  let attempts = 0, tick;
+  const logs = [], errors = [];
+  watch('latest', {
+    root, out: { log: value => logs.push(String(value)), error: value => errors.push(String(value)) },
+    createReader: () => ({ read() { attempts++; if (attempts === 1) throw Object.assign(new Error('EPERM: locked'), { code: 'EPERM' }); return real.read(); } }),
+    list: () => [], now: () => 0, scanMs: 1e9, schedule: callback => { tick = callback; return 1; },
+  });
+  assert.deepEqual(errors, ['Could not read the log: EPERM: locked']);
+  tick();
+  assert.match(logs.join('\n'), /优化会话查看器/);
+  fs.appendFileSync(file, JSON.stringify({ type: 'assistant/message', seq: 9999, time: Date.now(), data: { turn: 1, step: 99, message: { content: [{ type: 'text', text: 'WATCH_APPEND' }] } } }) + '\n');
+  tick();
+  assert.match(logs.join('\n'), /WATCH_APPEND/);
+});
+
+test('watch rescans the session tree on its scan interval, not on every tick', t => {
+  const root = fixture(t);
+  let scans = 0, tick, clock = 1000;
+  const logs = [];
+  watch('latest', {
+    root, out: { log: value => logs.push(String(value)), error: () => {} },
+    list: () => { scans++; return listSessionFiles(root); },
+    now: () => clock, scanMs: 5000, schedule: callback => { tick = callback; return 1; },
+  });
+  for (const at of [2000, 4000, 6000, 7000]) { clock = at; tick(); }
+  assert.equal(scans, 1);
+  assert.match(logs.join('\n'), /优化会话查看器/);
+});
+
+test('runSnapshot paints one frame and loads only the visible list titles', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsv-snapshot-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const at = new Date(2026, 0, 15, 12).getTime();
+  for (let index = 0; index < 40; index++) writeSimpleSession(root, `s${index}`, { mtime: at - index * 1000 });
+  let store;
+  const loads = [], chunks = [];
+  const code = await runSnapshot({
+    root, columns: 100, rows: 20, now: at, version: 'test',
+    out: { write: value => chunks.push(String(value)) },
+    createStore: options => {
+      store = createSessionStore(options);
+      const load = store.load.bind(store);
+      store.load = async meta => { loads.push(meta.id); return load(meta); };
+      return store;
+    },
+  });
+  assert.equal(code, 0);
+  const frame = chunks.join('');
+  assert.equal(frame.split('\n').slice(0, -1).length, 20);
+  assert.match(frame, /ANSWER_s0/);
+  assert.ok(loads.length < store.files.length, `loaded ${loads.length} of ${store.files.length}`);
+});
+
+test('dsv --snapshot prints exactly one frame from a selected session', t => {
+  const root = fixture(t);
+  const result = spawnSync(process.execPath, [cli, '--snapshot', '100x20', '--select', 'reading'], {
+    encoding: 'utf8', env: { ...process.env, DSH_SESSIONS_ROOT: root },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.split('\n').slice(0, -1).length, 20);
+  assert.match(result.stdout, /已完成阅读界面调整/);
 });

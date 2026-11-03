@@ -6,7 +6,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { collectUsage, createEventReader, decodeFrom, listSessionFiles, matchSession, readEvents } from '../lib/sessions.mjs';
+import { collectUsage, createEventReader, createAsyncEventReader, decodeFrom, listSessionFiles, listSessionFilesAsync, readEvents } from '../lib/sessions.mjs';
 
 // Fixtures follow dsh 0.2.1-rc.3's core/session/types.ts, llm/message.ts,
 // llm/assistant-stream.ts and session-persistence-jsonl/format.ts.
@@ -150,15 +150,43 @@ test('usage never reports absent buckets as zero, rejects contradictory totals, 
   assert.equal(collectUsage([]).available, false);
 });
 
-test('matching recognizes latest v4 plaintext and does not count stale generations twice', t => {
-  const root = temporary(t), marker = 'bridge-run';
-  const content = jsonl([header(), event('user/message', { role: 'user', source: { kind: 'user' }, content: text(`task\n${marker}\n`) })]);
-  write(root, 'project/id/session.v3.jsonl.zstd', zlib.zstdCompressSync(content));
-  write(root, 'project/id/session.v4.jsonl', content);
-  const match = matchSession(root, marker, Date.now() - 1000);
-  assert.equal(match.matched, true); assert.equal(match.version, 4); assert.equal(match.logComplete, true);
-  write(root, 'project/other/session.v4.jsonl', content);
-  assert.equal(matchSession(root, marker, Date.now() - 1000).reason, 'ambiguous_session');
+test('async reader reads compressed logs, defers torn frames, and advances incrementally', async t => {
+  const root = temporary(t), a = zlib.zstdCompressSync(jsonl([header()]));
+  const line = jsonl([event('user/message', { source: { kind: 'user' }, content: text('桥') })]);
+  const split = line.indexOf(Buffer.from('桥')) + 1;
+  const b = zlib.zstdCompressSync(line.subarray(0, split)), c = zlib.zstdCompressSync(line.subarray(split));
+  const file = write(root, 'session.v4.jsonl.zstd', Buffer.concat([a, b, c.subarray(0, c.length - 1)]));
+  const reader = createAsyncEventReader(file);
+  const initial = await reader.read();
+  assert.equal(initial.events.length, 1); assert.equal(initial.end, a.length); assert.equal(initial.complete, false);
+  assert.equal((await reader.read()).bytesRead, 0);
+  fs.appendFileSync(file, c.subarray(c.length - 1));
+  const done = await reader.read();
+  assert.equal(done.events.length, 2); assert.equal(done.events[1].data.content[0].text, '桥');
+  assert.equal(done.complete, true); assert.equal(done.bytesRead, b.length + c.length);
+  const later = zlib.zstdCompressSync(jsonl([event('session/title', { title: 'later' })]));
+  fs.appendFileSync(file, later);
+  const next = await reader.read();
+  assert.equal(next.added.length, 1); assert.equal(next.bytesRead, later.length); assert.equal((await reader.read()).bytesRead, 0);
+});
+
+test('async discovery selects the same generations and the async reader enforces the same limits', async t => {
+  const root = temporary(t);
+  write(root, 'project/id/session.v3.jsonl.zstd', zlib.zstdCompressSync(jsonl([header(3)])));
+  const newest = write(root, 'project/id/session.v4.jsonl', jsonl([header()]));
+  for (const name of ['session.v04.jsonl', 'session.v0.jsonl', 'session.v99.jsonl.tmp']) write(root, `project/id/${name}`, 'bad');
+  write(root, 'direct/session.v4.jsonl.zstd', zlib.zstdCompressSync(jsonl([header(4, 'direct')])));
+  const sync = listSessionFiles(root), async = await listSessionFilesAsync(root);
+  assert.deepEqual(async.map(({ id, file, version, compressed }) => ({ id, file, version, compressed })),
+    sync.map(({ id, file, version, compressed }) => ({ id, file, version, compressed })));
+  assert.equal(async.find(item => item.id === 'id').file, newest);
+  const data = jsonl([header(), event('turn/start', { turn: 1 })]);
+  const plain = write(root, 'plain/session.v4.jsonl', data);
+  await assert.rejects(createAsyncEventReader(plain, { maxBytes: data.length - 1 }).read(), /limit/);
+  await assert.rejects(createAsyncEventReader(plain, { maxEvents: 1 }).read(), /limit/);
+  const compressed = write(root, 'compressed/session.v4.jsonl.zstd',
+    zlib.zstdCompressSync(jsonl([header(), event('user/message', { content: text('x'.repeat(5000)) })])));
+  await assert.rejects(createAsyncEventReader(compressed, { maxBytes: 1000 }).read(), /limit/);
 });
 
 test('CLI renders current v4 tool results, system/developer events, structured errors, and usage', t => {

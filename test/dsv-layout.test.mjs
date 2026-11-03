@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderFrame, geometry, helpLines, helpView, listItems } from '../lib/viewer/layout.mjs';
+import { renderFrame, geometry, helpLines, helpView, listItems, statusInfo } from '../lib/viewer/layout.mjs';
 import { buildBlocks, flattenBlocks, anchoredScroll, blockKeyAt, moveBlockKey, shortTitle } from '../lib/viewer/blocks.mjs';
 import { charWidth, cut, displayWidth, styler, truncate, wrapText } from '../lib/viewer/text.mjs';
 
@@ -160,15 +160,41 @@ test('block building is lazy: process blocks do not wrap every tool body up fron
   assert.ok(expanded.lines.length > flat.lines.length);
 });
 
+test('failed and aborted turn reasons have friendly status labels', () => {
+  assert.equal(statusInfo('error').label, 'Failed');
+  assert.equal(statusInfo('aborted').label, 'Aborted');
+  for (const [state, label] of [['error', 'Failed'], ['aborted', 'Aborted']]) {
+    const selected = session(state, { state, title: `任务${label}` });
+    const frame = renderFrame(model({ sessions: [selected], selectedId: state, selected }));
+    assert.match(framePlain(frame)[1], new RegExp(`✗ ${label}`));
+  }
+});
+
 test('geometry keeps the detail block width consistent with what layout paints', () => {
   for (const columns of [80, 100, 128, 200]) {
     const geo = geometry(columns);
-    assert.ok(geo.leftWidth >= 26 || !geo.wide);
-    assert.equal(geo.wide ? geo.leftWidth + geo.rightWidth : geo.detailWidth, geo.wide ? columns : columns - 2);
+    const frame = renderFrame(model({ columns, rows: 20, focus: 'detail' }));
+    const panel = frame.hits.detailPanel, line = framePlain(frame)[2];
+    const painted = columnsOf(line, panel.x0, panel.x1);
+    assert.equal(displayWidth(painted), geo.detailWidth + 2, `${columns}: borders plus detail content`);
+    assert.equal(displayWidth(painted.slice(1, -1)), geo.detailWidth, `${columns}: painted content width`);
   }
   const items = listItems({ sessions: model().sessions, selectedId: 'b', listCursor: 'session:b', now });
   assert.deepEqual(items.items.map(item => item.key), ['group:running', 'group:running:active', 'session:b',
     'group:done', 'group:day:2026-01-14', 'session:a', 'group:day:2026-01-12', 'group:day:2026-01-03']);
+});
+
+test('a folded day group stays folded when a newer day appears', () => {
+  const day = 86_400_000;
+  const yesterday = session('day-15', { mtime: now - 10 * 60_000 });
+  const older = session('day-14', { mtime: now - day });
+  const toggled = new Map([['day:2026-01-15', true]]);
+  const before = listItems({ sessions: [yesterday, older], toggledGroups: toggled, now });
+  assert.ok(before.items.some(item => item.key === 'group:day:2026-01-15' && item.collapsed));
+  const latest = session('day-16', { mtime: now + day - 10 * 60_000 });
+  const after = listItems({ sessions: [latest, yesterday, older], toggledGroups: toggled, now: now + day });
+  assert.equal(after.collapsedOf('day:2026-01-16'), false, 'the untouched newest day still starts open');
+  assert.equal(after.collapsedOf('day:2026-01-15'), true, 'the user-folded day stays folded');
 });
 
 test('ambiguous-width status icons count as one column, emoji and CJK as two', () => {

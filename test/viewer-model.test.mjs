@@ -1,26 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { projectTranscript, groupSessionsByTime, relativePath } from '../lib/viewer-model.mjs';
+import { projectTranscript, relativePath } from '../lib/viewer-model.mjs';
 
 test('relative paths fold case only for Windows-style paths, so POSIX sibling directories are not mistaken for the project', () => {
   assert.equal(relativePath('/work/proj/src/a.js', '/work/proj'), 'src/a.js');
   assert.equal(relativePath('/work/Proj/other/README.md', '/work/proj'), '/work/Proj/other/README.md');
   assert.equal(relativePath('C:\\Work\\Proj\\src\\a.js', 'c:/work/proj'), 'src/a.js');
-});
-
-test('time groups follow local calendar boundaries and keep the newest update first', () => {
-  const now = new Date(2026, 0, 15, 0, 5).getTime();
-  const time = (date, hour = 12) => new Date(2026, 0, date, hour).getTime();
-  const rows = [
-    { id: 'old', mtime: time(8) }, { id: 'week-end', mtime: time(9) },
-    { id: 'last-night', mtime: time(14, 23) }, { id: 'today', mtime: time(15, 0) },
-    { id: 'future', mtime: time(16) }, { id: 'week-start', mtime: time(13) },
-  ];
-  assert.deepEqual(groupSessionsByTime(rows, now).map(g => [g.key, g.sessions.map(s => s.id)]), [
-    ['today', ['future', 'today']], ['yesterday', ['last-night']], ['week', ['week-start', 'week-end']], ['older', ['old']],
-  ]);
-  assert.deepEqual(rows.map(s => s.id), ['old', 'week-end', 'last-night', 'today', 'future', 'week-start']);
-  assert.deepEqual(groupSessionsByTime([], now), []);
 });
 
 const text = value => [{ type: 'text', text: value }];

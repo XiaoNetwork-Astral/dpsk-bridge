@@ -4,4 +4,4 @@
 import { main } from '../lib/viewer/cli.mjs';
 
 const code = await main(process.argv.slice(2));
-if (Number.isInteger(code) && code !== 0) process.exitCode = code;
+if (code) process.exitCode = code;
