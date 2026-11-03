@@ -27,17 +27,17 @@ dsb cancel <作业ID>
 
 `run` 会一直挂着，直到作业结束。宿主要保留这个进程的句柄，然后用 `dsb wait` 等待，每次返回后读取新的问题和进展。如果宿主的命令工具在命令运行期间拿不到输出，就把 `--time-limit` 设成能接受的上限，等结束后用 `dsb result` 读结果。这类宿主只适合派中途不需要做决定的任务。
 
-`events` 返回完整事件和一个字节游标（cursor，表示读到了日志的第几个字节）。下次把这个游标传给 `--cursor` 继续读；`more` 为真表示还有没读完的事件。`status.pendingRequests` 列出等待回复的问题和审批。回复普通问题时，按原问题的 ID 逐条填写：
+`events` 返回完整事件和一个字节游标（cursor，表示读到了日志的第几个字节）。下次把这个游标传给 `--cursor` 继续读；`more` 为真表示还有没读完的事件。`status.pendingRequests` 列出等待回复的问题和审批，每项都带 `requestId`。审批请求在 SDK 线上没有请求 ID，桥会为它生成一个稳定的本地 ID，`dsb answer --request` 的用法和问题时一样。回复普通问题时，按原问题的 ID 逐条填写：
 
 ```json
 {"answers":[{"id":"original-question-id","selected":[],"custom":"宿主补充的信息"}]}
 ```
 
-审批的回复是 `{"outcome":"allowed-once"}`、`{"outcome":"rejected"}` 或 `{"outcome":"cancelled"}`。批不批准由宿主按自己实际拥有的权限决定，桥不会自动授予任何权限；需要用户拍板时先问用户。提问和审批由随作业加载的 Harness 插件转发；追加消息和实时日志由 SDK 负责。每个作业有独立的 SDK 进程。
+审批的回复是 `{"outcome":"allowed-once"}`、`{"outcome":"rejected"}` 或 `{"outcome":"cancelled"}`。批不批准由宿主按自己实际拥有的权限决定，桥不会自动授予任何权限；需要用户拍板时先问用户。提问和审批通过 SDK 的 JSON-RPC 连接直接送达 dsh（`user-question/ask`、`approval/request`）；追加消息和实时日志也走同一个连接。每个作业有独立的 SDK 进程。
 
 每个作业最多回答 3 个提问请求；审批请求不计入也不受限。第 4 个提问的回答会被拒绝，除非命令带 `--user-ok`。宿主应先告诉用户当前情况；用户决定继续后，用 `--user-ok` 重发这次回答，该作业之后的提问就不再受限。被限制时 `dsb wait` 返回 `escalate`，而不是 `request`；审批仍返回 `request`。`dsb status` 显示 `answeredQuestions` 和 `questionLimit`。
 
-`send`/`answer` 返回 `queued` 只表示消息进了邮箱，还要在事件里看到 `input_delivered` 或 `input_rejected` 才算有结果。通过文件通道转交给宿主插件的回答，会先出现 `input_forwarded`（已转交、等待处理），这不等于已送达，仍要继续等。追加的要求在下一轮生效，不会打断当前步骤。作业结束后不能再追加，应该新建任务或用 `retry`。
+`send`/`answer` 返回 `queued` 只表示消息进了邮箱，还要在事件里看到 `input_delivered` 或 `input_rejected` 才算有结果。`input_delivered` 表示回答已经写入 SDK 连接；之后 dsh 内部的校验或执行错误不会再产生单独的桥事件。问题被运行端取消时会记录 `request_cancelled`，该请求从 `pendingRequests` 移除，已经排队但还没送达的回答会收到 `input_rejected`。追加的要求在下一轮生效，不会打断当前步骤。作业结束后不能再追加，应该新建任务或用 `retry`。
 
 ### 等待：dsb wait
 
@@ -52,7 +52,7 @@ dsb cancel <作业ID>
 - 上下文达到提醒阈值：`context`，每个作业只返回一次；
 - 超时：`timeout`。
 
-`--timeout` 默认 600 秒，范围 1–3600，而且不能超过宿主单次命令允许的时长。返回结果里的 `actionableRequests` 是还没回复的请求；`pendingRequests` 列出全部待处理请求。已经回复过的请求（回答在排队或已送达）不会再让 `wait` 返回 `request`，除非之后出现 `input_rejected`。有请求或 `escalate` 时先返回它们，`context` 在之后一次 `wait` 返回；作业已经结束时直接返回 `finished`，不再提醒上下文；返回过 `context` 后会在作业目录写一个标记文件，不再重复。`wait` 返回只说明发生了什么，不代表成功，仍然要读结果并验收。
+`--timeout` 默认 600 秒，范围 1–3600，而且不能超过宿主单次命令允许的时长。返回结果里的 `actionableRequests` 是还没回复的请求；`pendingRequests` 列出全部待处理请求。已经回复过的请求（回答在排队或已送达）不会再让 `wait` 返回 `request`，除非之后出现 `input_rejected`；被取消的请求会从 `pendingRequests` 移除，也不会再让 `wait` 返回。有请求或 `escalate` 时先返回它们，`context` 在之后一次 `wait` 返回；作业已经结束时直接返回 `finished`，不再提醒上下文；返回过 `context` 后会在作业目录写一个标记文件，不再重复。`wait` 返回只说明发生了什么，不代表成功，仍然要读结果并验收。
 
 上下文提醒的阈值默认 200000 token，可以用 `dsb run --context-limit <TOKENS>` 或环境变量 `DPSK_CONTEXT_LIMIT` 调整；`retry` 沿用原作业的值。每条带用量的助手消息都会刷新 `status.context`（`inputTokens + cacheReadTokens + cacheWriteTokens`）；第一次达到阈值时记录 `status.contextReminder` 和 `context_reminder` 事件，作业继续运行。`dsb status` 同时显示 `context` 和 `contextLimit`。
 

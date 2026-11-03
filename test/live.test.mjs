@@ -7,32 +7,45 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { runSdk, queueInput, eventsPage } from '../lib/live.mjs';
-import { apply } from '../lib/host-plugin.mjs';
 
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) {
   const deadline = Date.now() + 5000;
-  while (!check()) { if (Date.now() > deadline) throw new Error('Timed out waiting for fake SDK'); await delay(10); }
+  for (;;) {
+    const value = check(); if (value) return value;
+    if (Date.now() > deadline) throw new Error('Timed out waiting for fake SDK');
+    await delay(10);
+  }
 }
 class FakeChild extends EventEmitter {
   constructor() {
-    super(); this.stdout = new PassThrough();
+    super(); this.stdout = new PassThrough(); this.received = [];
     this.stdin = new Writable({ write: (chunk, encoding, done) => {
       const message = JSON.parse(chunk.toString().trim());
       queueMicrotask(() => this.receive(message)); done();
     } });
   }
-  send(message) { this.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n'); }
+  send(message) { if (!this.stdout.destroyed) this.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n'); }
   receive(message) {
-    if (message.method === 'initialize') this.send({ id: message.id, result: { serverInfo: { name: 'deepseek-harness-sdk-runtime' } } });
-    else if (message.method === 'session/prompt') {
+    if (message.method === 'initialize') {
+      this.initialize = message.params;
+      this.send({ id: message.id, result: { serverInfo: { name: 'deepseek-harness-sdk-runtime' } } });
+    } else if (message.method === 'session/prompt') {
       this.sessionId = message.params.sessionId;
       this.send({ method: 'session.event', params: { sessionId: this.sessionId, event: { type: 'turn/start', data: { turn: 1 } } } });
       this.send({ id: message.id, result: { messageId: randomUUID() } });
     } else if (message.method === 'session/wait') this.waiting = message.id;
     else if (message.method === 'shutdown') this.send({ id: message.id, result: {} });
-    else throw new Error(`Unexpected fake SDK method ${message.method}`);
+    else if (message.method) throw new Error(`Unexpected fake SDK method ${message.method}`);
+    else this.received.push(message);
   }
+  ask(params = { requestId: 'q-1', sessionId: 'root-session', questions: [{ id: 'q', question: 'Continue?' }] }) {
+    this.send({ id: 'ask-rpc-1', method: 'user-question/ask', params });
+  }
+  approval(params = { sessionId: 'root-session', toolName: 'pwsh', callId: 'call-1' }) {
+    this.send({ id: 'approval-rpc-1', method: 'approval/request', params });
+  }
+  cancel(requestId) { this.send({ method: 'user-question.cancelled', params: { requestId, sessionId: 'root-session' } }); }
   finish() {
     assert.ok(this.waiting);
     this.send({ method: 'session.event', params: { sessionId: this.sessionId, event: { type: 'assistant/message',
@@ -43,127 +56,112 @@ class FakeChild extends EventEmitter {
 }
 function fixture(t, emit = () => {}, signal = null) {
   const root = fs.mkdtempSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'live-fixture-'));
-  const home = path.join(root, 'home'), id = randomUUID(), dir = path.join(home, 'jobs', id), host = path.join(dir, 'host');
-  for (const part of ['requests', 'responses', 'cancelled', 'receipts']) fs.mkdirSync(path.join(host, part), { recursive: true });
-  fs.mkdirSync(path.join(dir, 'inbox'));
-  const job = { id, cwd: root, sdkSessionId: 'root-session', provider: 'fake', model: 'fake', hostDirectory: host,
+  const home = path.join(root, 'home'), id = randomUUID(), dir = path.join(home, 'jobs', id);
+  fs.mkdirSync(path.join(dir, 'inbox'), { recursive: true });
+  const job = { id, cwd: root, sdkSessionId: 'root-session', provider: 'fake', model: 'fake',
     processState: 'running', reportFile: path.join(dir, 'report.txt') };
-  const history = [], save = () => { history.push(structuredClone(job)); fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job)); };
+  const save = () => fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
   save(); const child = new FakeChild(), controller = new AbortController();
   const task = runSdk(child, { job, dir, prompt: 'test only', save, emit, signal: signal || controller.signal }); task.catch(() => {});
   t.after(async () => {
     controller.abort(new Error('Test cleanup')); await task.catch(() => {});
     child.stdin.destroy(); child.stdout.destroy(); fs.rmSync(root, { recursive: true, force: true });
   });
-  return { root, home, dir, host, job, history, child, task };
+  return { root, home, dir, job, child, task };
 }
-function mailbox(f, part, requestId) { return path.join(f.host, part, `${requestId}.json`); }
-function publish(f, requestId) {
-  fs.writeFileSync(mailbox(f, 'requests', requestId), JSON.stringify({ requestId, method: 'user-question/ask',
-    params: { requestId, sessionId: 'child-session', questions: [{ id: 'q', question: 'Continue?' }] } }));
-}
-function cancel(f, requestId) { fs.writeFileSync(mailbox(f, 'cancelled', requestId), JSON.stringify({ requestId, sessionId: 'child-session' })); }
 function events(f) {
   const file = path.join(f.dir, 'events.jsonl');
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
 }
+async function settle(f) { await until(() => f.child.waiting); f.child.finish(); await f.task; }
 
-test('a cancelled marker consumed before delayed request cleanup cannot resurrect pending state', async t => {
-  const f = fixture(t), requestId = randomUUID(), requestsDir = path.join(f.host, 'requests');
-  const original = fs.readdirSync; let injected = false;
+test('advertises native host capabilities over initialize and answers a native user question', async t => {
+  const f = fixture(t);
+  const initialized = await until(() => f.child.initialize);
+  assert.deepEqual(initialized.capabilities, { userQuestions: true });
+  assert.equal(initialized.approvalRequests, true);
+  f.child.ask();
+  const pending = await until(() => f.job.pendingRequests[0]);
+  assert.equal(pending.requestId, 'q-1');
+  assert.equal(pending.method, 'user-question/ask');
+  assert.ok(events(f).some(event => event.event === 'request' && event.requestId === 'q-1'));
+  const inputId = queueInput(f.job, 'answer', { requestId: pending.requestId,
+    answer: { answers: [{ id: 'q', selected: [], custom: 'Continue' }] } }, f.home).inputId;
+  const response = await until(() => f.child.received[0]);
+  assert.deepEqual(response, { jsonrpc: '2.0', id: 'ask-rpc-1', result: { answers: [{ id: 'q', selected: [], custom: 'Continue' }] } });
+  const delivered = await until(() => events(f).find(event => event.event === 'input_delivered' && event.inputId === inputId));
+  assert.equal(delivered.requestId, 'q-1');
+  assert.deepEqual(f.job.pendingRequests, []);
+  assert.equal(f.job.answeredQuestions, 1);
+  await settle(f);
+});
+
+test('a native cancellation clears the request and rejects a still-queued answer', async t => {
+  const f = fixture(t);
+  f.child.ask({ requestId: 'q-cancel', sessionId: 'root-session', questions: [{ id: 'q', question: 'Continue?' }] });
+  const pending = await until(() => f.job.pendingRequests[0]);
+  const inputId = queueInput(f.job, 'answer', { requestId: pending.requestId,
+    answer: { answers: [{ id: 'q', selected: [], custom: 'Continue' }] } }, f.home).inputId;
+  // Hide the queued answer from the drain until the cancellation is recorded, so
+  // the two orderings in the fix are deterministic rather than a 100 ms race.
+  const inbox = path.join(f.dir, 'inbox'), original = fs.readdirSync; let hidden = true;
   t.mock.method(fs, 'readdirSync', function(directory, ...args) {
-    const snapshot = original.call(this, directory, ...args);
-    if (!injected && directory === requestsDir) {
-      injected = true;
-      // The plugin published and cancelled after this request inventory was
-      // taken; its request cleanup is paused until the supervisor next polls.
-      publish(f, requestId); cancel(f, requestId);
-    }
-    return snapshot;
+    if (hidden && directory === inbox) return [];
+    return original.call(this, directory, ...args);
   });
-  await until(() => events(f).some(event => event.event === 'request_cancelled'));
-  // Simulate a stale directory entry surviving the marker's consumption.
-  publish(f, requestId);
-  // Wait for the supervisor's drain to remove the stale entry instead of
-  // racing its 100 ms interval with a fixed delay.
-  await until(() => fs.readdirSync(requestsDir).length === 0);
+  f.child.cancel(pending.requestId);
+  await until(() => events(f).some(event => event.event === 'request_cancelled' && event.requestId === 'q-cancel'));
   assert.deepEqual(f.job.pendingRequests, []);
-  assert.equal(events(f).filter(event => event.event === 'request' && event.requestId === requestId).length, 0);
-  await until(() => f.child.waiting); f.child.finish(); await f.task;
-  assert.deepEqual(f.job.pendingRequests, []);
-});
-
-test('cancellation during response publication rejects the input and removes the orphan response', async t => {
-  let f, inputId;
-  f = fixture(t, event => {
-    if (event.event === 'request') inputId = queueInput(f.job, 'answer', { requestId: event.requestId,
-      answer: { answers: [{ id: 'q', selected: [], custom: 'Continue' }] } }, f.home).inputId;
-  });
-  const requestId = randomUUID(), responseFile = mailbox(f, 'responses', requestId);
-  publish(f, requestId);
-  const original = fs.renameSync; let injected = false;
-  t.mock.method(fs, 'renameSync', function(source, destination) {
-    if (!injected && destination === responseFile) {
-      injected = true; cancel(f, requestId);
-      fs.unlinkSync(mailbox(f, 'requests', requestId));
-      // The plugin has finished cancellation cleanup before this response
-      // rename; it will never return to consume a subsequently written file.
-    }
-    return original.call(this, source, destination);
-  });
+  hidden = false;
   await until(() => events(f).some(event => event.event === 'input_rejected' && event.inputId === inputId));
-  assert.equal(injected, true); assert.equal(fs.existsSync(responseFile), false);
-  assert.deepEqual(f.job.pendingRequests, []);
   assert.equal(events(f).some(event => event.event === 'input_delivered' && event.inputId === inputId), false);
-  await until(() => f.child.waiting); f.child.finish(); await f.task;
-  assert.equal(fs.existsSync(responseFile), false); assert.deepEqual(f.job.pendingRequests, []);
+  assert.deepEqual(f.job.pendingRequests, []);
+  assert.deepEqual(f.child.received, []);
+  await settle(f);
 });
 
-test('file replies are forwarded first and reported delivered only after the real plugin consumption receipt', async t => {
-  let f, inputId;
-  f = fixture(t, event => {
-    if (event.event === 'request') inputId = queueInput(f.job, 'answer', { requestId: event.requestId,
-      answer: { answers: [{ id: 'q', selected: [], custom: 'Continue' }] } }, f.home).inputId;
-  });
-  const listeners = new Map(), disposers = [];
-  apply({ effect: execute => { const dispose = execute(); disposers.push(dispose); return dispose; },
-    on: (event, listener) => { listeners.set(event, listener); return () => listeners.delete(event); } }, { directory: f.host });
-  t.after(async () => { for (const dispose of disposers) await dispose(); });
-  // Delay invoking the real plugin until a response exists, proving that
-  // durable writing alone cannot produce a delivery receipt.
-  const requestId = randomUUID(); publish(f, requestId);
-  await until(() => events(f).some(event => event.event === 'input_forwarded'));
-  assert.equal(events(f).some(event => event.event === 'input_delivered'), false);
-  assert.equal(f.job.pendingRequests.length, 1);
-  fs.unlinkSync(mailbox(f, 'requests', requestId)); fs.unlinkSync(mailbox(f, 'responses', requestId));
-  // The synthetic request was intentionally never consumed. Cancel it before
-  // exercising the real plugin so its input gets an explicit rejection.
-  cancel(f, requestId);
-  await until(() => events(f).some(event => event.event === 'input_rejected' && event.inputId === inputId));
-  const question = listeners.get('user-questions/request')({ agent: { session: { id: 'child-session' } },
-    questions: [{ id: 'q', question: 'Continue?' }] }, () => { throw new Error('Unexpected fallback'); });
-  assert.deepEqual(await question, { answers: [{ id: 'q', selected: [], custom: 'Continue' }] });
-  await until(() => events(f).some(event => event.event === 'input_delivered' && event.inputId === inputId));
-  const delivered = events(f).find(event => event.event === 'input_delivered' && event.inputId === inputId);
-  assert.equal(delivered.receipt, 'plugin-consumed');
+test('a native approval without a wire request id gets a stable bridge id and an outcome answer', async t => {
+  const f = fixture(t);
+  f.child.approval();
+  const pending = await until(() => f.job.pendingRequests[0]);
+  assert.equal(pending.method, 'approval/request');
+  assert.match(pending.requestId, /^[a-f0-9-]{36}$/);
+  assert.equal(pending.params.requestId, pending.requestId);
+  assert.equal(pending.params.toolName, 'pwsh');
+  // The same id is what dsb status exposes and dsb answer accepts.
+  assert.equal(f.job.pendingRequests[0].requestId, pending.requestId);
+  queueInput(f.job, 'answer', { requestId: pending.requestId, answer: { outcome: 'allowed-once' } }, f.home);
+  const response = await until(() => f.child.received[0]);
+  assert.deepEqual(response, { jsonrpc: '2.0', id: 'approval-rpc-1', result: { outcome: 'allowed-once' } });
+  await until(() => events(f).some(event => event.event === 'input_delivered' && event.requestId === pending.requestId));
   assert.deepEqual(f.job.pendingRequests, []);
-  assert.deepEqual(fs.readdirSync(path.join(f.host, 'responses')), []);
-  assert.deepEqual(fs.readdirSync(path.join(f.host, 'receipts')), []);
-  await until(() => f.child.waiting); f.child.finish(); await f.task;
+  assert.equal(f.job.answeredQuestions || 0, 0);
+  await settle(f);
 });
 
-test('ending before a plugin receipt rejects the forwarded answer instead of claiming delivery', async t => {
-  let f, inputId;
-  f = fixture(t, event => {
-    if (event.event === 'request') inputId = queueInput(f.job, 'answer', { requestId: event.requestId,
-      answer: { answers: [{ id: 'q', selected: [], custom: 'Continue' }] } }, f.home).inputId;
-  });
-  const requestId = randomUUID(); publish(f, requestId);
-  await until(() => events(f).some(event => event.event === 'input_forwarded'));
-  await until(() => f.child.waiting); f.child.finish(); await f.task;
-  assert.ok(events(f).some(event => event.event === 'input_rejected' && event.inputId === inputId));
-  assert.equal(events(f).some(event => event.event === 'input_delivered' && event.inputId === inputId), false);
-  assert.deepEqual(f.job.pendingRequests, []); assert.equal(fs.existsSync(mailbox(f, 'responses', requestId)), false);
+test('an invalid answer is rejected before it reaches dsh and the request stays pending', async t => {
+  const f = fixture(t);
+  f.child.ask();
+  const pending = await until(() => f.job.pendingRequests[0]);
+  const rejectedId = queueInput(f.job, 'answer', { requestId: pending.requestId, answer: { answers: [] } }, f.home).inputId;
+  await until(() => events(f).some(event => event.event === 'input_rejected' && event.inputId === rejectedId));
+  assert.deepEqual(f.child.received, []);
+  assert.deepEqual(f.job.pendingRequests.map(request => request.requestId), [pending.requestId]);
+  queueInput(f.job, 'answer', { requestId: pending.requestId,
+    answer: { answers: [{ id: 'q', selected: ['A'], custom: 'valid' }] } }, f.home);
+  await until(() => f.child.received.length === 1);
+  assert.deepEqual(f.job.pendingRequests, []);
+  await settle(f);
+});
+
+test('an unsupported host request is rejected without becoming pending', async t => {
+  const f = fixture(t);
+  f.child.send({ id: 'other-1', method: 'tools/call', params: { name: 'x' } });
+  const rejection = await until(() => f.child.received[0]);
+  assert.equal(rejection.id, 'other-1');
+  assert.equal(rejection.error.code, -32601);
+  assert.deepEqual(f.job.pendingRequests ?? [], []);
+  await settle(f);
 });
 
 test('an already aborted signal rejects the session instead of running it', async t => {

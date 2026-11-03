@@ -43,7 +43,7 @@ const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\
 let sessionId, seq=0, asked=0, waitId, finished=false;
 const event=(type,data)=>write({method:'session.event',params:{sessionId,event:{type,seq:++seq,time:Date.now(),data}}});
 const ask=()=>{asked++;write({id:'ask-'+asked,method:'user-question/ask',params:{requestId:'q-'+asked,sessionId,questions:[{id:'choice',question:'Q'+asked,options:[]}]}});};
-const approve=()=>write({id:'approval-rpc',method:'approval/request',params:{requestId:'approval-1',sessionId}});
+const approve=()=>write({id:'approval-rpc',method:'approval/request',params:{sessionId}});
 const finish=()=>{
  if(finished)return;finished=true;
  event('assistant/message',{turn:1,step:1,message:{role:'assistant',content:[{type:'text',text:'RESULT: OK'}]},usage:{inputTokens:10,outputTokens:4,cacheReadTokens:0,cacheWriteTokens:0}});
@@ -83,6 +83,25 @@ readline.createInterface({input:process.stdin}).on('line',line=>{
   write({id:m.id,result:{messageId:'m'+prompts}});
  } else if(m.method==='session/wait'){if(finished)write({id:m.id,result:{}});else waitId=m.id;}
  else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
+});
+`;
+
+// Asks one question, then cancels it from the runtime while the job keeps running.
+const cancelFake = `
+import readline from 'node:readline';
+const write = m => process.stdout.write(JSON.stringify({jsonrpc:'2.0',...m})+'\\n');
+let sessionId, waitId, asked=false;
+readline.createInterface({input:process.stdin}).on('line',line=>{
+ const m=JSON.parse(line);
+ if(m.method==='initialize')write({id:m.id,result:{serverInfo:{name:'deepseek-harness-sdk-runtime'}}});
+ else if(m.method==='session/prompt'){
+  sessionId=m.params.sessionId;
+  if(!asked){asked=true;write({id:'ask-rpc',method:'user-question/ask',params:{requestId:'q-cancel',sessionId,questions:[{id:'choice',question:'Proceed?',options:[]}]}});
+   setTimeout(()=>write({method:'user-question.cancelled',params:{requestId:'q-cancel',sessionId}}),50);}
+  write({id:m.id,result:{messageId:'m'}});
+ } else if(m.method==='session/wait')waitId=m.id;
+ else if(m.method==='shutdown'){write({id:m.id,result:{}});setTimeout(()=>process.exit(0),10);}
+ else if(m.id==='ask-rpc'){/* the host answer is intentionally ignored */}
 });
 `;
 
@@ -183,8 +202,9 @@ test('question cap refuses the fourth answer until --user-ok, while approvals ne
   const approval = await waitJob({ id }, 10, home);
   assert.equal(approval.reason, 'request');
   assert.equal(approval.pendingRequests[0].method, 'approval/request');
+  assert.match(approval.pendingRequests[0].requestId, /^[a-f0-9-]{36}$/);
   assert.equal(readJob(id, home).answeredQuestions, 3);
-  answerRequest(readJob(id, home), 'approval-1', { outcome: 'allowed-once' }, home);
+  answerRequest(readJob(id, home), approval.pendingRequests[0].requestId, { outcome: 'allowed-once' }, home);
   const capped = await waitJob({ id }, 10, home);
   assert.equal(capped.reason, 'escalate');
   assert.deepEqual(capped.actionableRequests, ['q-4']);
@@ -207,6 +227,21 @@ test('question cap refuses the fourth answer until --user-ok, while approvals ne
   assert.equal(job.answeredQuestions, 5);
   assert.equal(job.questionCapLifted, true);
   assert.equal(eventsPage(job, 0, 200).events.filter(event => event.event === 'input_delivered').length, 6);
+});
+
+test('wait stops reporting a cancelled question as actionable', async t => {
+  const { options, home } = setup(t, '[cancel] question');
+  fs.writeFileSync(options.dshEntry, cancelFake);
+  const { started, running } = background(t, options, home);
+  const id = await started;
+  await waitForEvent(id, home, 'request_cancelled');
+  const waited = await waitJob({ id }, 1, home);
+  assert.equal(waited.reason, 'timeout');
+  assert.deepEqual(waited.actionableRequests, []);
+  assert.deepEqual(waited.pendingRequests, []);
+  cancelJob(readJob(id, home), home);
+  const job = await running;
+  assert.equal(job.processState, 'cancelled', job.error);
 });
 
 test('wait returns timeout for a running job and errors for bad timeouts or missing jobs', async t => {

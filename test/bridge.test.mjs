@@ -405,6 +405,31 @@ test('stats counts version-1 records as legacy and reserves unreadable for failu
   assert.equal(summary.unreadableJobs, 1);
 });
 
+test('retired forwarding fields and events in old records are read without errors', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-legacy-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'), id = '00000000-0000-4000-8000-000000000060';
+  const dir = path.join(home, 'jobs', id), requestId = '00000000-0000-4000-8000-000000000061';
+  fs.mkdirSync(dir, { recursive: true });
+  const job = { version: 2, id, parentId: null, rootId: id, processState: 'completed', supervisorPid: process.pid,
+    pendingRequests: [], answeredQuestions: 0, forwardedQuestions: 1, hostDirectory: path.join(dir, 'host'),
+    startedAt: Date.now(), review: null, exitCode: 0, reportedResult: 'OK', cwd: root,
+    reportFile: path.join(dir, 'report.txt'), stderrFile: path.join(dir, 'stderr.log'),
+    eventsFile: path.join(dir, 'events.jsonl') };
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
+  fs.writeFileSync(job.eventsFile, [
+    JSON.stringify({ event: 'request', requestId, method: 'user-question/ask', params: {} }),
+    JSON.stringify({ event: 'input_forwarded', inputId: requestId, requestId, receipt: 'awaiting-plugin-consumption' }),
+    JSON.stringify({ event: 'input_delivered', inputId: requestId, requestId, receipt: 'plugin-consumed' }),
+  ].join('\n') + '\n');
+  const record = readJob(id, home), snapshot = status(record);
+  assert.equal(snapshot.answeredQuestions, 0);
+  assert.deepEqual(snapshot.pendingRequests, []);
+  assert.deepEqual(eventsPage(record, 0, 10).events.map(event => event.event),
+    ['request', 'input_forwarded', 'input_delivered']);
+  assert.equal((await waitJob({ id }, 1, home)).reason, 'finished');
+});
+
 test('wait does not revive a request answered after the event scan', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-wait-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
