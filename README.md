@@ -53,7 +53,6 @@ The viewer lists sessions on the left, split into running and finished (by day),
 
 - [Usage reference](docs/usage.md) (Chinese): waiting, concurrency and scopes, images, experimental features, dsv keys, auto-update, releases
 - [deepseek-delegate skill](skill/deepseek-delegate/SKILL.md): how a host should dispatch, wait, and review
-- [VALIDATION.md](VALIDATION.md): validation records
 
 ## Development
 

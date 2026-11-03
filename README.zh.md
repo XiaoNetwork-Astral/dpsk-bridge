@@ -53,7 +53,6 @@ dsv update              检查并安装正式更新
 
 - [使用参考](docs/usage.md)：等待机制、并发与范围、图片、实验功能、dsv 按键、自动更新、发布流程
 - [deepseek-delegate skill](skill/deepseek-delegate/SKILL.md)：宿主应如何派单、等待和验收
-- [VALIDATION.md](VALIDATION.md)：验证记录
 
 ## 开发
 
