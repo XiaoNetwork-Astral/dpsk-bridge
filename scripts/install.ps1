@@ -1,30 +1,42 @@
 # Select exactly one host for each install/update/uninstall operation.
 param(
-    [ValidateSet('Claude', 'Codex', 'Generic')][string]$Target,
+    [string]$Target,
     [string]$SkillsDir,
     [switch]$SyncOnly,
     [switch]$Uninstall
 )
 $ErrorActionPreference = 'Stop'
-if (-not $Target) { throw 'Specify -Target Claude, Codex, or Generic. Generic also requires -SkillsDir.' }
-if ($Target -eq 'Generic' -and (-not $SkillsDir -or -not [IO.Path]::IsPathRooted($SkillsDir))) { throw 'Generic requires an absolute -SkillsDir for your host.' }
-if ($Target -ne 'Generic' -and $SkillsDir) { throw '-SkillsDir is only valid with -Target Generic.' }
 $Repo = Split-Path -Parent $PSScriptRoot
 $PkgName = 'dpsk-bridge'
 $SkillsSrc = Join-Path $Repo 'skill'
 $StateDir = Join-Path $env:USERPROFILE ".$PkgName"
 $BackupDir = Join-Path $StateDir 'backups'
-$Clients = @{
-    Claude = @{ Root = (Join-Path $env:USERPROFILE '.claude\skills'); Manifest = (Join-Path $StateDir 'installed-skills.txt') }
-    Codex = @{ Root = (Join-Path $env:USERPROFILE '.agents\skills'); Manifest = (Join-Path $StateDir 'installed-skills-codex.txt') }
-}
-if ($Target -eq 'Generic') {
-    $genericPath = [IO.Path]::GetFullPath($SkillsDir).TrimEnd('\')
+# Host presets (name, default skills directory, manifest file name) live in one file shared with sync-skills.mjs.
+$PresetFile = Join-Path $PSScriptRoot 'host-presets.json'
+if (-not (Test-Path -LiteralPath $PresetFile)) { throw "Missing host preset list: $PresetFile" }
+$Presets = Get-Content -LiteralPath $PresetFile -Raw | ConvertFrom-Json
+$PresetNames = @($Presets.PSObject.Properties.Name)
+if (-not $Target) { throw "Specify -Target <name>. Available presets: $($PresetNames -join ', ')." }
+$PresetProperty = $Presets.PSObject.Properties[$Target]
+if (-not $PresetProperty) { throw "Unknown -Target $Target. Available presets: $($PresetNames -join ', ')." }
+$Target = $PresetProperty.Name
+$Preset = $PresetProperty.Value
+$NeedsSkillsDir = -not $Preset.skills
+if ($NeedsSkillsDir -and (-not $SkillsDir -or -not [IO.Path]::IsPathRooted($SkillsDir))) { throw "$Target requires an absolute -SkillsDir for your host." }
+if (-not $NeedsSkillsDir -and $SkillsDir) { throw '-SkillsDir is only valid for a preset without a default skills directory.' }
+if ($NeedsSkillsDir) {
+    $customPath = [IO.Path]::GetFullPath($SkillsDir).TrimEnd('\')
     $hasher = [Security.Cryptography.SHA256]::Create()
-    try { $genericKey = ([BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($genericPath.ToLowerInvariant())))).Replace('-', '').Substring(0, 16) }
+    try { $customKey = ([BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($customPath.ToLowerInvariant())))).Replace('-', '').Substring(0, 16) }
     finally { $hasher.Dispose() }
-    $Clients.Generic = @{ Root = $genericPath; Manifest = (Join-Path $StateDir "installed-skills-generic-$genericKey.txt") }
+    $SelectedRoot = $customPath
+    $SelectedManifest = Join-Path $StateDir $Preset.manifest.Replace('{key}', $customKey)
+} else {
+    $SelectedRoot = Join-Path $env:USERPROFILE ($Preset.skills -replace '/', '\')
+    $SelectedManifest = Join-Path $StateDir $Preset.manifest
 }
+$Clients = @{}
+$Clients[$Target] = @{ Root = $SelectedRoot; Manifest = $SelectedManifest }
 # Copy old ownership manifests; keep original history/backups intact.
 $LegacyStateDir = Join-Path $env:USERPROFILE '.claude-deepseek-bridge'
 $MigrationMarker = Join-Path $StateDir 'legacy-manifests-migrated'

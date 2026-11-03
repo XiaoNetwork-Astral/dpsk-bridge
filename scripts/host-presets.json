@@ -1,0 +1,14 @@
+{
+  "Claude": {
+    "skills": ".claude/skills",
+    "manifest": "installed-skills.txt"
+  },
+  "Codex": {
+    "skills": ".agents/skills",
+    "manifest": "installed-skills-codex.txt"
+  },
+  "Generic": {
+    "skills": null,
+    "manifest": "installed-skills-generic-{key}.txt"
+  }
+}
