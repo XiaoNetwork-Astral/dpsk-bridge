@@ -303,6 +303,70 @@ stdout(JSON.stringify(frames));process.exit(0);`;
   assert.ok(highlighted(frames.pageDown).length > 0, 'PgDn brings the highlight onto the new page');
 });
 
+test('the transcript follows output appended after the wheel or j reaches the bottom until a wheel-up parks it', t => {
+  const root = fixture(t);
+  // Appended records use the same assistant/message shape as the fixture. Each
+  // one adds a single process-view line after the transcript's current end.
+  const script = `
+import fs from 'node:fs';import path from 'node:path';
+${VT}
+const frames={},timers=[];let current='';const stdout=process.stdout.write.bind(process.stdout);
+globalThis.setInterval=(callback,ms)=>{timers.push({callback,ms});return 1;};
+Object.defineProperty(process.stdout,'isTTY',{value:true});Object.defineProperty(process.stdin,'isTTY',{value:true});
+Object.defineProperty(process.stdout,'columns',{value:128});Object.defineProperty(process.stdout,'rows',{value:20});
+process.stdin.setRawMode=()=>{};process.stdout.write=s=>{if(apply(s))current=view();return true;};
+process.argv=['node',${JSON.stringify(cli)},'--no-update-check'];await import(${JSON.stringify(pathToFileURL(cli).href)});
+const key=s=>process.stdin.emit('data',Buffer.from(s));
+const tick=()=>timers.find(t=>t.ms===1000).callback();
+const file=path.join(process.env.DSH_SESSIONS_ROOT,'project','reading','session.v4.jsonl');
+let seq=5000;
+const append=text=>fs.appendFileSync(file,JSON.stringify({type:'assistant/message',seq:++seq,time:Date.now(),data:{turn:2,step:seq,message:{content:[{type:'text',text}]}}})+'\\n');
+const wheelDown=()=>key('\\x1b[<65;80;10M'),wheelUp=()=>key('\\x1b[<64;80;10M');
+key('\\td');
+frames.start=current;
+for(let i=0;i<60;i++)wheelDown();
+frames.bottom=current;
+append('FOLLOW_WHEEL_ONE appended after the wheel reached the bottom');
+tick();frames.wheelFollow=current;
+wheelUp();frames.wheelUp=current;
+append('FOLLOW_WHEEL_TWO appended after one wheel-up step');
+tick();frames.wheelParked=current;
+key('g'+'j'.repeat(200));frames.jBottom=current;
+append('FOLLOW_J_ONE appended after j reached the last block');
+tick();frames.jFollow=current;
+key('gG');frames.goBottom=current;
+append('FOLLOW_G_ONE appended after G');
+tick();frames.goBottomFollow=current;
+stdout(JSON.stringify(frames));process.exit(0);`;
+  const output = spawnSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8', env: { ...process.env, DSH_SESSIONS_ROOT: root }, timeout: 15000 });
+  assert.equal(output.status, 0, output.stderr);
+  const frames = Object.fromEntries(Object.entries(JSON.parse(output.stdout)).map(([key, value]) => [key, plain(value)]));
+  // Content rows of the detail box, without the top/bottom borders or footer.
+  const detailRows = frame => frame.split('\r\n').slice(2, -2);
+  // The pane's right edge carries a scroll thumb that moves as the log grows.
+  const detailBody = frame => detailRows(frame).map(line => line.slice(0, -1));
+
+  // 1. The wheel reached the bottom, then appended output stays in view.
+  assert.ok(!frames.start.includes('已完成阅读界面调整'), 'the process view starts at the top');
+  assert.match(frames.bottom, /已完成阅读界面调整/, 'the wheel scrolled to the bottom before appending');
+  assert.match(detailRows(frames.wheelFollow).at(-1), /FOLLOW_WHEEL_ONE/,
+    'the view followed output appended after the wheel reached the bottom');
+
+  // 2. One wheel-up step parks the view: later output must not pull it back down.
+  assert.notEqual(frames.wheelUp, frames.wheelFollow, 'the wheel-up moved the view');
+  assert.match(frames.jBottom, /FOLLOW_WHEEL_TWO/, 'the last existing block was reached later from the top');
+  assert.ok(!frames.wheelParked.includes('FOLLOW_WHEEL_TWO'), 'the parked view does not jump to appended output');
+  assert.deepEqual(detailBody(frames.wheelParked), detailBody(frames.wheelUp), 'the parked view stayed where it was');
+
+  // 3. Moving down with j onto the last block resumes following.
+  assert.match(detailRows(frames.jFollow).at(-1), /FOLLOW_J_ONE/,
+    'the view followed output appended after j reached the last block');
+
+  // 4. G still follows.
+  assert.match(frames.goBottom, /FOLLOW_J_ONE/, 'G jumped to the bottom of the existing transcript');
+  assert.match(detailRows(frames.goBottomFollow).at(-1), /FOLLOW_G_ONE/, 'G followed output appended afterwards');
+});
+
 test('split escape sequences wait for the next chunk while a lone Escape is flushed', () => {
   const arrow = { pending: '' };
   assert.deepEqual(parseInput('\x1b[', arrow), []);
