@@ -7,7 +7,7 @@
     "skills": ".agents/skills",
     "manifest": "installed-skills-codex.txt"
   },
-  "Generic": {
+  "other": {
     "skills": null,
     "manifest": "installed-skills-generic-{key}.txt"
   }

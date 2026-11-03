@@ -1,17 +1,22 @@
 #!/usr/bin/env bash
 # dpsk-bridge installer for Linux and macOS.
 #
-# Piped (no arguments are possible, choose options with environment variables):
-#   curl -fsSL https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/installer.sh | bash
+# Usage:
+#   ./installer.sh [install [claude|codex|other <SKILLS_DIR>]]
+#   ./installer.sh uninstall [claude|codex|other <SKILLS_DIR>]
+#   ./installer.sh -h | --help
 #
-# From a file:
-#   ./installer.sh [install|upgrade|uninstall] [--target NAME]... [--skills-dir DIR] [--all] [--install-dir DIR]
+# Piped:
+#   curl -fsSL https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/installer.sh | bash
+#   curl -fsSL .../installer.sh | bash -s -- uninstall
 #
 # The Node core in scripts/installer-core.mjs performs the actual installation.
 set -eu
 
 repo_url='https://github.com/XiaoNetwork-Astral/dpsk-bridge.git'
 official_slug='XiaoNetwork-Astral/dpsk-bridge'
+cleanup_url="https://github.com/$official_slug/releases/latest/download/cleanup.sh"
+usage_hint='Usage: installer [install [claude|codex|other <SKILLS_DIR>]] | installer uninstall [claude|codex|other <SKILLS_DIR>] | installer -h | --help'
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
   bold=$'\033[1m'; dim=$'\033[2m'; green=$'\033[32m'; yellow=$'\033[33m'; red=$'\033[31m'; reset=$'\033[0m'
@@ -38,7 +43,7 @@ step_warn() {
 fail() {
   printf '  %s%s%s %s\n' "$red" '✗' "$reset" "$1" >&2
   if [ $# -gt 1 ] && [ -n "$2" ]; then
-    printf '    %s→ %s%s\n' "$dim" "$2" "$reset" >&2
+    printf '    %s-> %s%s\n' "$dim" "$2" "$reset" >&2
   fi
   exit 1
 }
@@ -47,115 +52,108 @@ usage() {
   cat <<'EOF'
 dpsk-bridge installer (Linux and macOS)
 
+Install, upgrade or uninstall dpsk-bridge for the harnesses on this machine.
+
 Usage:
-  Piped (no arguments are possible, choose with environment variables):
+  installer [install [claude|codex|other <SKILLS_DIR>]]
+  installer uninstall [claude|codex|other <SKILLS_DIR>]
+  installer -h | --help
+
+  No argument, or "install": install or upgrade every detected harness.
+  With a target, only that harness. "other" needs an absolute SKILLS_DIR.
+
+Harnesses:
+  claude   ~/.claude/skills (detected when ~/.claude exists)
+  codex    ~/.agents/skills (detected when ~/.agents or ~/.codex exists)
+  other    any absolute skills directory (recorded in ~/.dpsk-bridge)
+
+Install and upgrade:
+  A found Git install is upgraded to the latest release, then the chosen
+  harnesses are installed or resynced. Without one, the latest release is
+  cloned into ~/.dpsk-bridge/app. A non-Git install is refused: run the
+  cleanup script first, then this installer again.
+
+Uninstall:
+  Without a target, every recorded harness is removed, then the global
+  dsb / dsv commands and the install record. With a target, only that harness.
+
+Get the latest release:
+  Linux and macOS:
     curl -fsSL https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/installer.sh | bash
-    curl -fsSL .../installer.sh | DPSK_ACTION=upgrade bash
-    curl -fsSL .../installer.sh | DPSK_ACTION=uninstall DPSK_UNINSTALL_ALL=1 bash
-    curl -fsSL .../installer.sh | bash -s -- uninstall --target claude
+    curl -fsSL .../installer.sh | bash -s -- uninstall
+  Windows:
+    irm https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/installer.ps1 | iex
 
-  From a file:
-    ./installer.sh [install|upgrade|uninstall] [--target NAME]... [--skills-dir DIR] [--all] [--install-dir DIR]
-
-Actions:
-  install      Install or repair dpsk-bridge (default)
-  upgrade      Fast-forward the checkout to the latest GitHub Release, then reinstall
-  uninstall    Remove one host's skills, or everything with --all
-
-Options:
-  --target NAME        Host to install or uninstall: Claude, Codex or Generic (repeatable)
-  --skills-dir DIR     Absolute skills directory, only with --target Generic
-  --all                Uninstall every host, the shared commands and the install record
-  --install-dir DIR    Fresh-install location [default: ~/.dpsk-bridge/app]
-  -h, --help           Show this help
-
-Environment variables (arguments override them):
-  DPSK_ACTION          install, upgrade or uninstall [default: install]
-  DPSK_TARGET          Comma-separated hosts, for example Claude,Codex
-  DPSK_SKILLS_DIR      Absolute skills directory for Generic
-  DPSK_UNINSTALL_ALL   Set to 1 to uninstall everything
-  DPSK_INSTALL_DIR     Fresh-install location
+Cleanup (leftovers from a broken or non-Git install):
+  curl -fsSL https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/cleanup.sh | bash
 
 The checkout is located from this script's directory, ~/.dpsk-bridge/install.json
-or the global npm dpsk-bridge link. With no checkout, install clones the latest
-release into ~/.dpsk-bridge/app (or --install-dir).
+or the global npm dpsk-bridge link.
 EOF
 }
 
-action=''
-targets=''
-skills_dir=''
-all='0'
-install_dir=''
-action_set='0'
-target_set='0'
-skills_set='0'
-all_set='0'
-install_set='0'
+# ---------------------------------------------------------------------------
+# Positional command line
+# ---------------------------------------------------------------------------
 
-while [ $# -gt 0 ]; do
+action='install'
+target=''
+skills_dir=''
+help='0'
+
+if [ $# -gt 0 ]; then
   case "$1" in
-    install|upgrade|uninstall)
-      if [ "$action_set" = 1 ]; then fail "Unexpected action: $1" 'Use one action: install, upgrade or uninstall'; fi
-      action="$1"; action_set='1'
-      ;;
-    --target)
+    install|uninstall)
+      action="$1"
       shift
-      if [ $# -eq 0 ] || [ -z "$1" ]; then fail '--target requires a host name' 'Use --target Claude, --target Codex or --target Generic'; fi
-      if [ "$target_set" = 1 ]; then targets="$targets,$1"; else targets="$1"; target_set='1'; fi
-      ;;
-    --target=*)
-      value="${1#--target=}"
-      if [ -z "$value" ]; then fail '--target requires a host name' 'Use --target Claude, --target Codex or --target Generic'; fi
-      if [ "$target_set" = 1 ]; then targets="$targets,$value"; else targets="$value"; target_set='1'; fi
-      ;;
-    --skills-dir)
-      shift
-      if [ $# -eq 0 ] || [ -z "$1" ]; then fail '--skills-dir requires a directory' 'Use --skills-dir <absolute-directory>'; fi
-      skills_dir="$1"; skills_set='1'
-      ;;
-    --skills-dir=*)
-      value="${1#--skills-dir=}"
-      if [ -z "$value" ]; then fail '--skills-dir requires a directory' 'Use --skills-dir <absolute-directory>'; fi
-      skills_dir="$value"; skills_set='1'
-      ;;
-    --all)
-      all='1'; all_set='1'
-      ;;
-    --install-dir)
-      shift
-      if [ $# -eq 0 ] || [ -z "$1" ]; then fail '--install-dir requires a directory' 'Use --install-dir <directory>'; fi
-      install_dir="$1"; install_set='1'
-      ;;
-    --install-dir=*)
-      value="${1#--install-dir=}"
-      if [ -z "$value" ]; then fail '--install-dir requires a directory' 'Use --install-dir <directory>'; fi
-      install_dir="$value"; install_set='1'
       ;;
     -h|--help)
-      usage
-      exit 0
+      help='1'
+      shift
       ;;
     *)
-      fail "Unknown argument: $1" 'Run: bash installer.sh --help'
+      fail "Unknown command: $1" "$usage_hint"
       ;;
   esac
-  shift
-done
+fi
 
-if [ "$action_set" = 0 ]; then action="${DPSK_ACTION:-install}"; fi
-if [ "$target_set" = 0 ]; then targets="${DPSK_TARGET:-}"; fi
-if [ "$skills_set" = 0 ]; then skills_dir="${DPSK_SKILLS_DIR:-}"; fi
-if [ "$all_set" = 0 ] && [ "${DPSK_UNINSTALL_ALL:-0}" = 1 ]; then all='1'; fi
-if [ "$install_set" = 0 ]; then install_dir="${DPSK_INSTALL_DIR:-}"; fi
+if [ "$help" = 1 ]; then
+  if [ $# -gt 0 ]; then fail "Help takes no arguments" "$usage_hint"; fi
+  usage
+  exit 0
+fi
 
-action="$(printf '%s' "$action" | tr '[:upper:]' '[:lower:]')"
-case "$action" in
-  install|upgrade|uninstall) ;;
-  *) fail "Unknown action: $action" 'Use install, upgrade or uninstall; run: bash installer.sh --help' ;;
-esac
-if [ "$all" = 1 ] && [ "$action" != uninstall ]; then
-  fail '--all / DPSK_UNINSTALL_ALL is only valid with uninstall' "Use: bash installer.sh uninstall --all"
+if [ $# -gt 0 ]; then
+  first_target="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$first_target" in
+    claude)
+      target='Claude'
+      shift
+      ;;
+    codex)
+      target='Codex'
+      shift
+      ;;
+    other)
+      shift
+      if [ $# -eq 0 ] || [ -z "$1" ]; then
+        fail 'other requires an absolute skills directory' "$usage_hint"
+      fi
+      skills_dir="$1"
+      shift
+      case "$skills_dir" in
+        /*) ;;
+        *) fail "Skills directory must be absolute: $skills_dir" "$usage_hint" ;;
+      esac
+      target='other'
+      ;;
+    *)
+      fail "Unknown target: $1" "$usage_hint"
+      ;;
+  esac
+fi
+if [ $# -gt 0 ]; then
+  fail "Unexpected argument: $1" "$usage_hint"
 fi
 
 printf '%s\n' "${bold}dpsk-bridge installer${reset}"
@@ -239,9 +237,25 @@ is_official_origin() {
   return 1
 }
 
+# A found install must be a Git checkout at its own root. Anything else (an
+# unpacked archive, `npm install -g`) cannot be upgraded safely.
+assert_git_checkout() {
+  local dir="$1"
+  local top top_real dir_real
+  if ! top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then
+    fail "Found an install that is not a Git checkout: $dir" "Run the cleanup script first ($cleanup_url), then run this installer again"
+  fi
+  top_real="$(resolve_real_path "$top")"
+  dir_real="$(resolve_real_path "$dir")"
+  if [ -z "$top_real" ] || [ -z "$dir_real" ] || [ "$top_real" != "$dir_real" ]; then
+    fail "Found an install that is not a Git checkout at its root: $dir" "Run the cleanup script first ($cleanup_url), then run this installer again"
+  fi
+}
+
 # Latest published release tag; the test seam wins, the GitHub API is primary
 # and the remote tag list is the offline fallback.
 latest_release_tag() {
+  local override release tag listing
   override="${DPSK_INSTALLER_UPGRADE_TAG:-}"
   if [ -n "$override" ]; then printf '%s' "$override"; return 0; fi
   release=''
@@ -259,7 +273,7 @@ latest_release_tag() {
 }
 
 # ---------------------------------------------------------------------------
-# Locate, migrate or clone the checkout
+# Locate the checkout
 # ---------------------------------------------------------------------------
 
 install_record="${HOME:?HOME is not set}/.dpsk-bridge/install.json"
@@ -298,16 +312,8 @@ done
 # location the user chose, first fetching the latest release tag and then
 # letting the merge's fast-forward check reject divergent history.
 bootstrap_checkout() {
-  dir="$1"
-  step_warn 'Found an older dpsk-bridge checkout' "$dir"
-  if ! top="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)"; then
-    fail "This checkout is not a Git checkout: $dir" 'Move it away, then run the installer again to install the latest release'
-  fi
-  top_real="$(resolve_real_path "$top")"
-  dir_real="$(resolve_real_path "$dir")"
-  if [ -z "$top_real" ] || [ -z "$dir_real" ] || [ "$top_real" != "$dir_real" ]; then
-    fail "The dpsk-bridge checkout must be the Git root: $dir" "git -C \"$dir\" rev-parse --show-toplevel"
-  fi
+  local dir="$1"
+  local origins origin_count first_origin status tag
   if ! origins="$(git -C "$dir" config --get-all remote.origin.url 2>/dev/null)"; then
     fail "origin must point to the official $official_slug repository" "git -C \"$dir\" remote set-url origin $repo_url"
   fi
@@ -343,15 +349,8 @@ bootstrap_checkout() {
 }
 
 clone_checkout() {
-  dir="$1"
-  case "$dir" in
-    '~') dir="$HOME" ;;
-    '~/'*) dir="$HOME${dir#\~}" ;;
-  esac
-  case "$dir" in
-    /*) ;;
-    *) dir="$PWD/$dir" ;;
-  esac
+  local dir="$1"
+  local tag
   tag="$(latest_release_tag)"
   if [ -z "$tag" ]; then
     fail 'Cannot determine the latest dpsk-bridge release' "Check network access, or clone manually: git clone $repo_url \"$dir\""
@@ -361,7 +360,7 @@ clone_checkout() {
   fi
   if [ -e "$dir" ]; then
     if [ -n "$(ls -A "$dir" 2>/dev/null || true)" ]; then
-      fail "Install directory is not empty: $dir" 'Choose another --install-dir or remove it'
+      fail "Install directory is not empty: $dir" "Remove it, then run this installer again"
     fi
   fi
   mkdir -p "$(dirname "$dir")"
@@ -373,23 +372,31 @@ clone_checkout() {
   checkout="$dir"
 }
 
+mode='fresh'
 if [ -n "$checkout" ]; then
+  mode='found'
+  assert_git_checkout "$checkout"
   step_ok 'Using dpsk-bridge checkout' "$checkout"
-elif [ -n "$legacy" ]; then
   if [ "$action" = uninstall ]; then
-    fail 'This checkout predates the 0.5.0 installer core and cannot be uninstalled directly' "Run the installer's upgrade first (curl -fsSL https://github.com/$official_slug/releases/latest/download/installer.sh | DPSK_ACTION=upgrade bash), then run uninstall"
+    step_ok 'Found an existing install; uninstalling' "$checkout"
+  else
+    step_ok 'Found an existing install; upgrading or resyncing' "$checkout"
   fi
+elif [ -n "$legacy" ]; then
+  mode='legacy'
+  assert_git_checkout "$legacy"
+  if [ "$action" = uninstall ]; then
+    fail 'This install predates the 0.5.0 installer core and cannot be uninstalled directly' "Run this installer (install) to upgrade it first, then uninstall again"
+  fi
+  step_warn 'Found an older install; fast-forwarding it in place' "$legacy"
   bootstrap_checkout "$legacy"
   checkout="$legacy"
 else
-  if [ "$action" != install ]; then
-    fail "No existing dpsk-bridge checkout was found for '$action'" "Install it first: curl -fsSL https://github.com/$official_slug/releases/latest/download/installer.sh | bash"
+  if [ "$action" = uninstall ]; then
+    fail 'No existing dpsk-bridge install was found to uninstall' "Run the cleanup script to remove leftovers: $cleanup_url"
   fi
-  if [ -n "$install_dir" ]; then
-    clone_checkout "$install_dir"
-  else
-    clone_checkout "$HOME/.dpsk-bridge/app"
-  fi
+  step_warn 'No install found; cloning the latest release into ~/.dpsk-bridge/app'
+  clone_checkout "$HOME/.dpsk-bridge/app"
 fi
 
 core="$checkout/scripts/installer-core.mjs"
@@ -402,20 +409,13 @@ step_ok 'Using installer core' "$core"
 # Run the core and report its result
 # ---------------------------------------------------------------------------
 
-core_args=("$core" "$action")
-if [ -n "$targets" ]; then
-  old_ifs="$IFS"
-  IFS=','
-  set -f
-  for target in $targets; do
-    target="$(printf '%s' "$target" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    if [ -n "$target" ]; then core_args+=(--target "$target"); fi
-  done
-  set +f
-  IFS="$old_ifs"
-fi
-if [ -n "$skills_dir" ]; then core_args+=(--skills-dir "$skills_dir"); fi
-if [ "$all" = 1 ]; then core_args+=(--all); fi
+core_command="$action"
+if [ "$action" = install ] && [ "$mode" = found ]; then core_command='upgrade'; fi
+
+core_args=("$core" "$core_command")
+if [ "$action" = uninstall ] && [ -z "$target" ]; then core_args+=(--all); fi
+if [ -n "$target" ]; then core_args+=(--target "$target"); fi
+if [ -n "$skills_dir" ]; then core_args+=(--skills "$skills_dir"); fi
 
 set +e
 node "${core_args[@]}"

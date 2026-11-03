@@ -10,8 +10,8 @@
  * scheduler is imported for the same reason it is dependency-free.
  *
  * Commands: install, upgrade, uninstall, sync.
- * The thin `installer.ps1` / `installer.sh` wrappers must call this file with
- * the same verbs and options.
+ * The thin `installer.ps1` / `installer.sh` wrappers translate the positional
+ * command line (`install` / `uninstall`, optional target) into these options.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -230,7 +230,7 @@ function listManifests() {
 }
 
 // ---------------------------------------------------------------------------
-// Presets, Generic keys and host records
+// Presets, other keys and host records
 // ---------------------------------------------------------------------------
 
 function loadPresets() {
@@ -254,20 +254,26 @@ function loadPresets() {
 const presets = loadPresets();
 const presetNames = Object.keys(presets);
 const fallbackPreset = presetNames.find(name => !presets[name].skills);
-if (!fallbackPreset) fail('Host preset list has no Generic preset', 'Restore scripts/host-presets.json with a Generic entry');
+if (!fallbackPreset) fail('Host preset list has no fallback preset',
+  'Restore scripts/host-presets.json with an "other" entry');
 
 function presetName(value) {
-  const key = presetNames.find(name => name.toLowerCase() === String(value ?? '').toLowerCase());
+  const text = String(value ?? '').toLowerCase();
+  // "Generic" was the pre-0.6 name of the fallback preset; keep accepting it so
+  // old scripts and records keep working while every message says "other".
+  const key = presetNames.find(name => name.toLowerCase() === text) ||
+    (text === 'generic' ? fallbackPreset : null);
   if (!key) {
     fail(`Unknown target "${value}"; available presets: ${presetNames.join(', ')}`,
-      'Use --target Claude, --target Codex, or --target Generic --skills-dir <absolute-directory>');
+      `Use --target Claude, --target Codex, or --target ${fallbackPreset} --skills <absolute-directory>`);
   }
   return key;
 }
 
 // The old PowerShell installer keyed Generic manifests by this exact value:
 // SHA-256 over the lower-cased absolute path without a trailing separator,
-// first 16 hex characters, upper case.
+// first 16 hex characters, upper case. The key formula is kept unchanged so
+// pre-0.6 manifests are reused rather than duplicated.
 function genericKey(directory) {
   let absolute = path.resolve(directory);
   const root = path.parse(absolute).root;
@@ -280,9 +286,9 @@ function genericKey(directory) {
 function defaultRoot(preset) { return path.join(home, presets[preset].skills); }
 
 function buildHost(preset, root) {
-  if (preset === 'Generic' && !path.isAbsolute(root)) {
-    fail(`Generic requires an absolute skills directory; found ${root}`,
-      'Pass --skills-dir <absolute-directory> (for example ~/host/skills)');
+  if (!presets[preset].skills && !path.isAbsolute(root)) {
+    fail(`The ${preset} preset requires an absolute skills directory; found ${root}`,
+      'Pass --skills <absolute-directory> (for example ~/host/skills)');
   }
   const resolved = path.resolve(root);
   const manifestName = presets[preset].skills ? presets[preset].manifest
@@ -304,7 +310,10 @@ function readHostRecords() {
       fail(`Invalid host record: ${name}`, `Fix the "root" in ${file} to an absolute skills directory`);
     }
     const requested = typeof record.target === 'string' ? record.target : '';
-    const known = presetNames.find(preset => preset.toLowerCase() === requested.toLowerCase());
+    let known = presetNames.find(preset => preset.toLowerCase() === requested.toLowerCase());
+    // Pre-0.6 records used "Generic"; treat them as the fallback preset without
+    // reporting an unknown preset.
+    if (!known && requested.toLowerCase() === 'generic') known = fallbackPreset;
     records.push({ file, requested, target: known ?? fallbackPreset, unknown: !known, root: path.resolve(record.root),
       manifest: path.join(stateDir, name.replace(/\.host\.json$/, '.txt')) });
   }
@@ -323,32 +332,38 @@ function dedupeHosts(hosts) {
 function chooseHosts({ targets = [], skillsDir = null } = {}) {
   const notices = [];
   const requested = [...new Set(targets.map(presetName))];
-  if (skillsDir && !requested.includes('Generic')) {
-    fail('--skills-dir is only valid with --target Generic', 'Drop --skills-dir or add --target Generic');
+  if (skillsDir && !requested.includes(fallbackPreset)) {
+    fail(`--skills is only valid with --target ${fallbackPreset}`,
+      `Drop --skills or add --target ${fallbackPreset}`);
   }
-  if (requested.includes('Generic')) {
-    if (!skillsDir) fail('Generic requires an absolute --skills-dir', 'Add --skills-dir <absolute-directory>');
-    if (!path.isAbsolute(skillsDir)) fail(`--skills-dir must be an absolute path; found ${skillsDir}`,
+  if (requested.includes(fallbackPreset)) {
+    if (!skillsDir) fail(`${fallbackPreset} requires an absolute --skills`,
+      'Add --skills <absolute-directory>');
+    if (!path.isAbsolute(skillsDir)) fail(`--skills must be an absolute path; found ${skillsDir}`,
       'Pass the full path, for example ~/.config/host/skills');
   }
   if (requested.length) {
     return { hosts: dedupeHosts(requested.map(preset => buildHost(preset,
-      preset === 'Generic' ? skillsDir : defaultRoot(preset)))), notices };
+      preset === fallbackPreset ? skillsDir : defaultRoot(preset)))), notices };
   }
+  // Default install: every recorded harness plus every newly detected one.
   const records = readHostRecords();
-  if (records.length) {
-    for (const record of records) {
-      if (record.unknown) {
-        notices.push(`Synchronizing ${path.basename(record.file)}: unknown preset ${JSON.stringify(record.requested)} ` +
-          `is handled as Generic at ${record.root}.`);
-      }
+  for (const record of records) {
+    if (record.unknown) {
+      notices.push(`Synchronizing ${path.basename(record.file)}: unknown preset ${JSON.stringify(record.requested)} ` +
+        `is handled as ${fallbackPreset} at ${record.root}.`);
     }
-    return { hosts: dedupeHosts(records.map(record => buildHost(record.target, record.root))), notices };
   }
+  const hosts = records.map(record => buildHost(record.target, record.root));
   const detected = [];
   if (fs.existsSync(path.join(home, '.claude'))) detected.push('Claude');
   if (fs.existsSync(path.join(home, '.agents')) || fs.existsSync(path.join(home, '.codex'))) detected.push('Codex');
-  return { hosts: detected.map(preset => buildHost(preset, defaultRoot(preset))), notices };
+  for (const preset of detected) {
+    const root = defaultRoot(preset);
+    if (hosts.some(host => host.target === preset || samePath(host.root, root))) continue;
+    hosts.push(buildHost(preset, root));
+  }
+  return { hosts: dedupeHosts(hosts), notices };
 }
 
 // ---------------------------------------------------------------------------
@@ -890,10 +905,10 @@ Commands:
   sync        Re-sync skills for every recorded host
 
 Options:
-  --target <Claude|Codex|Generic>  Host to install or uninstall (repeatable, case-insensitive)
-  --skills-dir <DIR>               Absolute skills directory, only with --target Generic
-  --all                            Uninstall every host, the command link and the install record
-  -h, --help                       Show this help
+  --target <Claude|Codex|other>  Host to install or uninstall (repeatable, case-insensitive)
+  --skills <DIR>                 Absolute skills directory, only with --target other
+  --all                          Uninstall every host, the command link and the install record
+  -h, --help                     Show this help
 
 Next: node scripts/installer-core.mjs install --target Claude
 `);
@@ -907,7 +922,7 @@ function summary(hosts) {
     process.stdout.write(dim('Reopen the host session if the new skills do not appear.\n'));
   } else {
     process.stdout.write(`${bold('Next:')} add a host: ` +
-      `node scripts/installer-core.mjs install --target Claude|Codex|Generic --skills-dir <dir>\n`);
+      `node scripts/installer-core.mjs install --target Claude|Codex|other --skills <dir>\n`);
   }
 }
 
@@ -992,11 +1007,13 @@ async function uninstallCommand({ targets, all, skillsDir }) {
   }
   const records = readHostRecords();
   const requested = [...new Set(targets.map(presetName))];
-  if (skillsDir && !requested.includes('Generic')) {
-    fail('--skills-dir is only valid with --target Generic', 'Drop --skills-dir or add --target Generic');
+  if (skillsDir && !requested.includes(fallbackPreset)) {
+    fail(`--skills is only valid with --target ${fallbackPreset}`,
+      `Drop --skills or add --target ${fallbackPreset}`);
   }
   if (skillsDir && !path.isAbsolute(skillsDir)) {
-    fail(`--skills-dir must be an absolute path; found ${skillsDir}`, 'Pass the full path to the Generic skills directory');
+    fail(`--skills must be an absolute path; found ${skillsDir}`,
+      `Pass the full path to the ${fallbackPreset} skills directory`);
   }
   let hosts = [];
   if (all) {
@@ -1010,18 +1027,18 @@ async function uninstallCommand({ targets, all, skillsDir }) {
     }
   } else {
     for (const preset of requested) {
-      if (preset === 'Generic') {
+      if (preset === fallbackPreset) {
         if (skillsDir) {
-          const host = buildHost('Generic', skillsDir);
+          const host = buildHost(fallbackPreset, skillsDir);
           hosts.push({ ...host, record: hostRecordPath(host.manifest) });
           continue;
         }
-        const generic = records.filter(record => record.target === 'Generic');
-        if (generic.length !== 1) {
-          fail('Generic requires --skills-dir (or use --all for every host)',
+        const custom = records.filter(record => record.target === fallbackPreset);
+        if (custom.length !== 1) {
+          fail(`${fallbackPreset} requires --skills (or use --all for every host)`,
             `node "${scriptFile}" uninstall --all`);
         }
-        hosts.push({ target: 'Generic', root: generic[0].root, manifest: generic[0].manifest, record: generic[0].file });
+        hosts.push({ target: fallbackPreset, root: custom[0].root, manifest: custom[0].manifest, record: custom[0].file });
       } else {
         const matching = records.filter(record => record.target === preset);
         if (matching.length) {
@@ -1083,7 +1100,7 @@ async function syncCommand() {
   for (const record of records) {
     if (!record.unknown) continue;
     step('!', `Synchronizing ${path.basename(record.file)}: unknown preset ${JSON.stringify(record.requested)} ` +
-      `is handled as Generic at ${record.root}.`);
+      `is handled as ${fallbackPreset} at ${record.root}.`);
   }
   syncHosts(dedupeHosts(records.map(record => buildHost(record.target, record.root))));
   step('✓', 'Installed host skills synchronized');
@@ -1103,19 +1120,19 @@ function parseArguments(argv) {
     else if (argument === '--all') plan.all = true;
     else if (argument === '--target') {
       const value = args.shift();
-      if (!value) fail('--target requires a host name', 'Use --target Claude|Codex|Generic');
+      if (!value) fail('--target requires a host name', 'Use --target Claude|Codex|other');
       plan.targets.push(value);
     } else if (argument.startsWith('--target=')) {
       const value = argument.slice('--target='.length);
-      if (!value) fail('--target requires a host name', 'Use --target Claude|Codex|Generic');
+      if (!value) fail('--target requires a host name', 'Use --target Claude|Codex|other');
       plan.targets.push(value);
-    } else if (argument === '--skills-dir') {
+    } else if (argument === '--skills' || argument === '--skills-dir') {
       const value = args.shift();
-      if (!value) fail('--skills-dir requires a directory', 'Use --skills-dir <absolute-directory>');
+      if (!value) fail('--skills requires a directory', 'Use --skills <absolute-directory>');
       plan.skillsDir = value;
-    } else if (argument.startsWith('--skills-dir=')) {
-      const value = argument.slice('--skills-dir='.length);
-      if (!value) fail('--skills-dir requires a directory', 'Use --skills-dir <absolute-directory>');
+    } else if (argument.startsWith('--skills=') || argument.startsWith('--skills-dir=')) {
+      const value = argument.slice(argument.indexOf('=') + 1);
+      if (!value) fail('--skills requires a directory', 'Use --skills <absolute-directory>');
       plan.skillsDir = value;
     } else if (argument.startsWith('-')) {
       fail(`Unknown option: ${argument}`, 'Run: node scripts/installer-core.mjs --help');

@@ -1,19 +1,16 @@
-param(
-    [string]$Action,
-    [string[]]$Target,
-    [string]$SkillsDir,
-    [switch]$All,
-    [string]$InstallDir,
-    [switch]$Help
-)
-
 # dpsk-bridge installer for Windows PowerShell 5.1 and PowerShell 7.
 # This file is intentionally ASCII-only: Windows PowerShell 5.1 and
 # "irm ... | iex" mishandle non-ASCII source and byte-order marks.
-# Piped (no arguments are possible, choose options with environment variables):
+#
+# Positional command line (no param() block, so it works from a file and from
+# & ([scriptblock]::Create((irm <url>))) ARGS):
+#   .\installer.ps1 [install [claude|codex|other <SKILLS_DIR>]]
+#   .\installer.ps1 uninstall [claude|codex|other <SKILLS_DIR>]
+#   .\installer.ps1 -h | --help
+#
+# Piped:
 #   irm https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/installer.ps1 | iex
-# From a file:
-#   .\installer.ps1 [-Action install|upgrade|uninstall] [-Target NAME[,NAME]] [-SkillsDir DIR] [-All] [-InstallDir DIR]
+#
 # The Node core in scripts/installer-core.mjs performs the actual installation.
 
 # Windows PowerShell 5.1 consoles default to the OEM code page, which turns
@@ -22,6 +19,8 @@ try { [Console]::OutputEncoding = [Text.UTF8Encoding]::new($false) } catch {}
 
 $RepoUrl = 'https://github.com/XiaoNetwork-Astral/dpsk-bridge.git'
 $OfficialSlug = 'XiaoNetwork-Astral/dpsk-bridge'
+$CleanupUrl = "https://github.com/$OfficialSlug/releases/latest/download/cleanup.ps1"
+$UsageHint = 'Usage: installer [install [claude|codex|other <SKILLS_DIR>]] | installer uninstall [claude|codex|other <SKILLS_DIR>] | installer -h | --help'
 
 function Write-Step {
     param([string]$Kind, [string]$Message, [string]$Detail)
@@ -48,85 +47,93 @@ function Show-Help {
     Write-Output @'
 dpsk-bridge installer (Windows)
 
+Install, upgrade or uninstall dpsk-bridge for the harnesses on this machine.
+
 Usage:
-  Piped (no arguments are possible, choose with environment variables):
+  installer [install [claude|codex|other <SKILLS_DIR>]]
+  installer uninstall [claude|codex|other <SKILLS_DIR>]
+  installer -h | --help
+
+  No argument, or "install": install or upgrade every detected harness.
+  With a target, only that harness. "other" needs an absolute SKILLS_DIR.
+
+Harnesses:
+  claude   ~/.claude/skills (detected when ~/.claude exists)
+  codex    ~/.agents/skills (detected when ~/.agents or ~/.codex exists)
+  other    any absolute skills directory (recorded in ~/.dpsk-bridge)
+
+Install and upgrade:
+  A found Git install is upgraded to the latest release, then the chosen
+  harnesses are installed or resynced. Without one, the latest release is
+  cloned into ~/.dpsk-bridge/app. A non-Git install is refused: run the
+  cleanup script first, then this installer again.
+
+Uninstall:
+  Without a target, every recorded harness is removed, then the global
+  dsb / dsv commands and the install record. With a target, only that harness.
+
+Get the latest release:
+  Windows:
     irm https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/installer.ps1 | iex
-    $env:DPSK_ACTION = 'upgrade'; irm .../installer.ps1 | iex
-    $env:DPSK_ACTION = 'uninstall'; $env:DPSK_UNINSTALL_ALL = '1'; irm .../installer.ps1 | iex
+    & ([scriptblock]::Create((irm .../installer.ps1))) uninstall
+  Linux and macOS:
+    curl -fsSL .../installer.sh | bash
 
-  From a file:
-    .\installer.ps1 [-Action install|upgrade|uninstall] [-Target NAME[,NAME]] [-SkillsDir DIR] [-All] [-InstallDir DIR]
-
-Actions:
-  install      Install or repair dpsk-bridge (default)
-  upgrade      Fast-forward the checkout to the latest GitHub Release, then reinstall
-  uninstall    Remove one host's skills, or everything with -All
-
-Options:
-  -Action NAME       install, upgrade or uninstall
-  -Target NAME       Host to install or uninstall: Claude, Codex or Generic (comma-separated)
-  -SkillsDir DIR     Absolute skills directory, only with -Target Generic
-  -All               Uninstall every host, the shared commands and the install record
-  -InstallDir DIR    Fresh-install location (default: ~/.dpsk-bridge/app)
-  -Help              Show this help
-
-Environment variables (arguments override them):
-  DPSK_ACTION          install, upgrade or uninstall (default: install)
-  DPSK_TARGET          Comma-separated hosts, for example Claude,Codex
-  DPSK_SKILLS_DIR      Absolute skills directory for Generic
-  DPSK_UNINSTALL_ALL   Set to 1 to uninstall everything
-  DPSK_INSTALL_DIR     Fresh-install location
+Cleanup (leftovers from a broken or non-Git install):
+  irm https://github.com/XiaoNetwork-Astral/dpsk-bridge/releases/latest/download/cleanup.ps1 | iex
 
 The checkout is located from this script's directory, ~/.dpsk-bridge/install.json
-or the global npm dpsk-bridge link. With no checkout, install clones the latest
-release into ~/.dpsk-bridge/app (or -InstallDir).
+or the global npm dpsk-bridge link.
 '@
 }
 
-if ($Help.IsPresent) {
+# ---------------------------------------------------------------------------
+# Positional command line
+# ---------------------------------------------------------------------------
+
+$actionValue = 'install'
+$targetValue = $null
+$skillsValue = $null
+$showHelp = $false
+
+$remaining = @($args)
+if ($remaining.Count -gt 0) {
+    $firstArgument = ([string]$remaining[0]).ToLowerInvariant()
+    if ($firstArgument -eq 'install' -or $firstArgument -eq 'uninstall') {
+        $actionValue = $firstArgument
+        if ($remaining.Count -gt 1) { $remaining = @($remaining[1..($remaining.Count - 1)]) } else { $remaining = @() }
+    } elseif ($firstArgument -eq '-h' -or $firstArgument -eq '--help') {
+        $showHelp = $true
+        if ($remaining.Count -gt 1) { $remaining = @($remaining[1..($remaining.Count - 1)]) } else { $remaining = @() }
+    } else {
+        Fail "Unknown command: $($remaining[0])" $UsageHint
+    }
+}
+
+if ($showHelp) {
+    if ($remaining.Count -gt 0) { Fail 'Help takes no arguments' $UsageHint }
     Show-Help
     exit 0
 }
 
-# ---------------------------------------------------------------------------
-# Arguments and environment variables
-# ---------------------------------------------------------------------------
-
-$actionValue = $Action
-if ([string]::IsNullOrWhiteSpace($actionValue)) { $actionValue = $env:DPSK_ACTION }
-if ([string]::IsNullOrWhiteSpace($actionValue)) { $actionValue = 'install' }
-$actionValue = $actionValue.Trim().ToLowerInvariant()
-if (@('install', 'upgrade', 'uninstall') -notcontains $actionValue) {
-    Fail "Unknown action: $actionValue" 'Use install, upgrade or uninstall; run .\installer.ps1 -Help for details'
-}
-
-$targetValues = @()
-$rawTargets = @()
-if ($null -ne $Target -and $Target.Count -gt 0) {
-    $rawTargets += $Target
-} elseif (-not [string]::IsNullOrWhiteSpace($env:DPSK_TARGET)) {
-    $rawTargets += ($env:DPSK_TARGET -split ',')
-}
-foreach ($rawTarget in $rawTargets) {
-    foreach ($part in ([string]$rawTarget -split ',')) {
-        $trimmed = $part.Trim()
-        if ($trimmed.Length -gt 0) { $targetValues += $trimmed }
+if ($remaining.Count -eq 1) {
+    $targetName = ([string]$remaining[0]).ToLowerInvariant()
+    switch ($targetName) {
+        'claude' { $targetValue = 'Claude' }
+        'codex' { $targetValue = 'Codex' }
+        'other' { Fail 'other requires an absolute skills directory' $UsageHint }
+        default { Fail "Unknown target: $($remaining[0])" $UsageHint }
     }
+} elseif ($remaining.Count -eq 2) {
+    $targetName = ([string]$remaining[0]).ToLowerInvariant()
+    if ($targetName -ne 'other') { Fail "Unexpected argument: $($remaining[1])" $UsageHint }
+    $skillsValue = [string]$remaining[1]
+    if ([string]::IsNullOrWhiteSpace($skillsValue)) { Fail 'other requires an absolute skills directory' $UsageHint }
+    if (-not [System.IO.Path]::IsPathRooted($skillsValue)) { Fail "Skills directory must be absolute: $skillsValue" $UsageHint }
+    $targetValue = 'other'
+} elseif ($remaining.Count -gt 2) {
+    Fail "Unexpected argument: $($remaining[2])" $UsageHint
 }
-
-$skillsValue = $null
-if (-not [string]::IsNullOrWhiteSpace($SkillsDir)) { $skillsValue = $SkillsDir }
-elseif (-not [string]::IsNullOrWhiteSpace($env:DPSK_SKILLS_DIR)) { $skillsValue = $env:DPSK_SKILLS_DIR }
-
-$allValue = $All.IsPresent
-if (-not $allValue -and $env:DPSK_UNINSTALL_ALL -eq '1') { $allValue = $true }
-if ($allValue -and $actionValue -ne 'uninstall') {
-    Fail '-All / DPSK_UNINSTALL_ALL is only valid with uninstall' 'Use: .\installer.ps1 -Action uninstall -All'
-}
-
-$installDirValue = $null
-if (-not [string]::IsNullOrWhiteSpace($InstallDir)) { $installDirValue = $InstallDir }
-elseif (-not [string]::IsNullOrWhiteSpace($env:DPSK_INSTALL_DIR)) { $installDirValue = $env:DPSK_INSTALL_DIR }
 
 Write-Output 'dpsk-bridge installer'
 
@@ -227,6 +234,21 @@ function Test-OfficialOrigin {
     return $false
 }
 
+# A found install must be a Git checkout at its own root. Anything else (an
+# unpacked archive, npm install -g) cannot be upgraded safely.
+function Assert-GitCheckout {
+    param([string]$Dir)
+    $top = @(& $gitCommand.Source -C $Dir rev-parse --show-toplevel 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $top.Count -eq 0) {
+        Fail "Found an install that is not a Git checkout: $Dir" "Run the cleanup script first ($CleanupUrl), then run this installer again"
+    }
+    $topPath = Resolve-RealPath ([string]$top[0])
+    $dirPath = Resolve-RealPath (Get-FullPath $Dir)
+    if ([string]::IsNullOrWhiteSpace($topPath) -or [string]::IsNullOrWhiteSpace($dirPath) -or $topPath -ne $dirPath) {
+        Fail "Found an install that is not a Git checkout at its root: $Dir" "Run the cleanup script first ($CleanupUrl), then run this installer again"
+    }
+}
+
 # Latest published release tag; the test seam wins, the GitHub API is primary
 # and the remote tag list is the offline fallback.
 function Get-LatestTag {
@@ -251,7 +273,7 @@ function Get-LatestTag {
 }
 
 # ---------------------------------------------------------------------------
-# Locate, migrate or clone the checkout
+# Locate the checkout
 # ---------------------------------------------------------------------------
 
 $stateFile = Join-Path (Join-Path $HomeDir '.dpsk-bridge') 'install.json'
@@ -298,16 +320,6 @@ foreach ($candidate in $candidates) {
 # letting the merge's fast-forward check reject divergent history.
 function Update-LegacyCheckout {
     param([string]$Dir)
-    Write-Step 'warn' 'Found an older dpsk-bridge checkout' $Dir
-    $top = @(& $gitCommand.Source -C $Dir rev-parse --show-toplevel 2>$null)
-    if ($LASTEXITCODE -ne 0 -or $top.Count -eq 0) {
-        Fail "This checkout is not a Git checkout: $Dir" 'Move it away, then run the installer again to install the latest release'
-    }
-    $topPath = Resolve-RealPath ([string]$top[0])
-    $dirPath = Resolve-RealPath (Get-FullPath $Dir)
-    if ([string]::IsNullOrWhiteSpace($topPath) -or [string]::IsNullOrWhiteSpace($dirPath) -or $topPath -ne $dirPath) {
-        Fail "The dpsk-bridge checkout must be the Git root: $Dir" "git -C `"$Dir`" rev-parse --show-toplevel"
-    }
     $origins = @(& $gitCommand.Source -C $Dir config --get-all remote.origin.url 2>$null)
     if ($LASTEXITCODE -ne 0 -or $origins.Count -ne 1 -or -not (Test-OfficialOrigin ([string]$origins[0]))) {
         Fail "origin must point to the official $OfficialSlug repository" "git -C `"$Dir`" remote set-url origin $RepoUrl"
@@ -347,7 +359,7 @@ function Install-FreshCheckout {
     }
     if (Test-Path -LiteralPath $Dir) {
         $entries = @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)
-        if ($entries.Count -gt 0) { Fail "Install directory is not empty: $Dir" 'Choose another -InstallDir or remove it' }
+        if ($entries.Count -gt 0) { Fail "Install directory is not empty: $Dir" 'Remove it, then run this installer again' }
     } else {
         $parent = Split-Path -Parent $Dir
         if (-not [string]::IsNullOrWhiteSpace($parent) -and -not (Test-Path -LiteralPath $parent)) {
@@ -360,21 +372,31 @@ function Install-FreshCheckout {
     Write-Step 'ok' "Cloned dpsk-bridge $tag" $Dir
 }
 
+$mode = 'fresh'
 if ($null -ne $checkout) {
+    $mode = 'found'
+    Assert-GitCheckout $checkout
     Write-Step 'ok' 'Using dpsk-bridge checkout' $checkout
-} elseif ($null -ne $legacy) {
     if ($actionValue -eq 'uninstall') {
-        Fail 'This checkout predates the 0.5.0 installer core and cannot be uninstalled directly' "Run the installer's upgrade first (.\installer.ps1 -Action upgrade), then run uninstall"
+        Write-Step 'ok' 'Found an existing install; uninstalling' $checkout
+    } else {
+        Write-Step 'ok' 'Found an existing install; upgrading or resyncing' $checkout
     }
+} elseif ($null -ne $legacy) {
+    $mode = 'legacy'
+    Assert-GitCheckout $legacy
+    if ($actionValue -eq 'uninstall') {
+        Fail 'This install predates the 0.5.0 installer core and cannot be uninstalled directly' 'Run this installer (install) to upgrade it first, then uninstall again'
+    }
+    Write-Step 'warn' 'Found an older install; fast-forwarding it in place' $legacy
     Update-LegacyCheckout $legacy
     $checkout = $legacy
 } else {
-    if ($actionValue -ne 'install') {
-        Fail "No existing dpsk-bridge checkout was found for '$actionValue'" "Install it first: irm https://github.com/$OfficialSlug/releases/latest/download/installer.ps1 | iex"
+    if ($actionValue -eq 'uninstall') {
+        Fail 'No existing dpsk-bridge install was found to uninstall' "Run the cleanup script to remove leftovers: $CleanupUrl"
     }
-    $freshDir = $installDirValue
-    if ([string]::IsNullOrWhiteSpace($freshDir)) { $freshDir = Join-Path $HomeDir '.dpsk-bridge/app' }
-    $freshPath = Get-FullPath $freshDir
+    Write-Step 'warn' 'No install found; cloning the latest release into ~/.dpsk-bridge/app'
+    $freshPath = Get-FullPath (Join-Path (Join-Path $HomeDir '.dpsk-bridge') 'app')
     Install-FreshCheckout $freshPath
     $checkout = $freshPath
 }
@@ -389,10 +411,13 @@ Write-Step 'ok' 'Using installer core' $corePath
 # Run the core and report its result
 # ---------------------------------------------------------------------------
 
-$coreArgs = @($actionValue)
-foreach ($targetValue in $targetValues) { $coreArgs += @('--target', $targetValue) }
-if (-not [string]::IsNullOrWhiteSpace($skillsValue)) { $coreArgs += @('--skills-dir', $skillsValue) }
-if ($allValue) { $coreArgs += '--all' }
+$coreCommand = $actionValue
+if ($actionValue -eq 'install' -and $mode -eq 'found') { $coreCommand = 'upgrade' }
+
+$coreArgs = @($coreCommand)
+if ($actionValue -eq 'uninstall' -and [string]::IsNullOrWhiteSpace($targetValue)) { $coreArgs += '--all' }
+if (-not [string]::IsNullOrWhiteSpace($targetValue)) { $coreArgs += @('--target', $targetValue) }
+if (-not [string]::IsNullOrWhiteSpace($skillsValue)) { $coreArgs += @('--skills', $skillsValue) }
 
 & $nodeCommand.Source $corePath @coreArgs
 $coreStatus = $LASTEXITCODE

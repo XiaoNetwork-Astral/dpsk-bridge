@@ -21,6 +21,8 @@
     "bin",
     "installer.ps1",
     "installer.sh",
+    "cleanup.ps1",
+    "cleanup.sh",
     "lib",
     "skill",
     "scripts"
@@ -30,7 +32,7 @@
   },
   "dshVersion": "0.2.2-alpha.3",
   "scripts": {
-    "check": "node --check bin/dsv.mjs && node --check bin/dsb.mjs && node --check lib/cli.mjs && node --check lib/bridge.mjs && node --check lib/job-state.mjs && node --check lib/sessions.mjs && node --check lib/live.mjs && node --check lib/sdk.mjs && node --check lib/scheduler.mjs && node --check lib/updater.mjs && node --check lib/viewer-model.mjs && node --check lib/viewer/text.mjs && node --check lib/viewer/blocks.mjs && node --check lib/viewer/store.mjs && node --check lib/viewer/layout.mjs && node --check lib/viewer/screen.mjs && node --check lib/viewer/app.mjs && node --check lib/viewer/cli.mjs && node --check scripts/sync-skills.mjs && node --check scripts/installer-core.mjs",
+    "check": "node --check bin/dsv.mjs && node --check bin/dsb.mjs && node --check lib/cli.mjs && node --check lib/bridge.mjs && node --check lib/job-state.mjs && node --check lib/sessions.mjs && node --check lib/live.mjs && node --check lib/sdk.mjs && node --check lib/scheduler.mjs && node --check lib/updater.mjs && node --check lib/viewer-model.mjs && node --check lib/viewer/text.mjs && node --check lib/viewer/blocks.mjs && node --check lib/viewer/store.mjs && node --check lib/viewer/layout.mjs && node --check lib/viewer/screen.mjs && node --check lib/viewer/app.mjs && node --check lib/viewer/cli.mjs && node --check scripts/sync-skills.mjs && node --check scripts/installer-core.mjs && node --check test/wrappers.test.mjs && node --check test/installer.test.mjs && node --check test/cleanup.test.mjs",
     "test": "node --test \"test/**/*.test.mjs\"",
     "sync-skills": "node scripts/installer-core.mjs sync"
   },

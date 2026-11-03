@@ -102,7 +102,7 @@ test('--help exits 0 and lists the commands and options', t => {
   const { home } = profile(t);
   const result = run(home, ['--help']);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  for (const text of ['install', 'upgrade', 'uninstall', 'sync', '--target', '--skills-dir', '--all', '--help']) {
+  for (const text of ['install', 'upgrade', 'uninstall', 'sync', '--target', '--skills', '--all', '--help', 'other']) {
     assert.ok(result.stdout.includes(text), `help must mention ${text}`);
   }
 });
@@ -145,21 +145,35 @@ test('install honors explicit case-insensitive targets and reuses the legacy Gen
   fs.writeFileSync(path.join(state, `installed-skills-generic-${key}.host.json`),
     JSON.stringify({ target: 'Generic', root: destination }));
 
-  const result = run(home, ['install', '--target', 'codex', '--target', 'GENERIC', '--skills-dir', destination]);
+  const result = run(home, ['install', '--target', 'codex', '--target', 'OTHER', '--skills', destination]);
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assertSkills(path.join(home, '.agents', 'skills'), true);
   assertSkills(destination, true);
   const genericManifests = fs.readdirSync(state).filter(name => /^installed-skills-generic-[A-F0-9]{16}\.txt$/.test(name));
   assert.deepEqual(genericManifests, [`installed-skills-generic-${key}.txt`]);
   const host = readJson(path.join(state, `installed-skills-generic-${key}.host.json`));
-  assert.equal(host.target, 'Generic');
+  assert.equal(host.target, 'other');
   assert.equal(fs.realpathSync.native(host.root), fs.realpathSync.native(destination));
 
   // A later run without --target must reuse both recorded hosts and stay idempotent.
   const second = run(home, ['install']);
   assert.equal(second.status, 0, second.stdout + second.stderr);
   assert.match(second.stdout, /Codex skills up to date/);
-  assert.match(second.stdout, /Generic skills up to date/);
+  assert.match(second.stdout, /other skills up to date/);
+});
+
+test('default install syncs detected harnesses plus recorded other hosts', t => {
+  const { home } = profile(t);
+  const destination = path.join(home, 'custom', 'skills');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  const first = run(home, ['install', '--target', 'other', '--skills', destination]);
+  assert.equal(first.status, 0, first.stdout + first.stderr);
+  const second = run(home, ['install']);
+  assert.equal(second.status, 0, second.stdout + second.stderr);
+  assertSkills(path.join(home, '.claude', 'skills'), true);
+  assertSkills(destination, true);
+  assert.match(second.stdout, /Claude skills (updated|up to date)/);
+  assert.match(second.stdout, /other skills up to date/);
 });
 
 test('uninstall removes one host, keeps the other, and --all clears the rest', t => {

@@ -40,7 +40,7 @@ test('sync-skills executes against temporary records and handles a known and an 
 
   const result = sync(home);
   assert.equal(result.status, 0, result.stdout + result.stderr);
-  assert.match(result.stdout, /unknown preset "Cursor" is handled as Generic/);
+  assert.match(result.stdout, /unknown preset "Cursor" is handled as other/);
   assertSkills(claudeRoot);
   assertSkills(customRoot);
   assert.ok(fs.existsSync(path.join(state, 'installed-skills.txt')));
