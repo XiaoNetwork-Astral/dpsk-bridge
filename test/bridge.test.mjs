@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { runJob, readJob, sendMessage, answerRequest, eventsPage, cancelJob, result, retryJob, reviewJob, stats, briefText, waitJob, unlockJob } from '../lib/bridge.mjs';
+import { runJob, readJob, status, sendMessage, answerRequest, eventsPage, cancelJob, result, retryJob, reviewJob, stats, briefText, waitJob, unlockJob } from '../lib/bridge.mjs';
 
 const fake = `
 import readline from 'node:readline';
@@ -246,6 +246,36 @@ test('retry preserves the original task and current SDK settings', async t => {
   assert.equal(retry.processState, 'completed', retry.error);
 });
 
+test('a task allows one rework, refuses the second, and resumes do not count', async t => {
+  const { options, home } = setup(t, 'rework cap');
+  const job = await runJob(options, () => {}, home);
+  assert.equal(job.retryKind, null);
+  const first = await retryJob(job, 'first rework', () => {}, home);
+  assert.equal(first.retryKind, 'rework');
+  await assert.rejects(retryJob(first, 'second rework', () => {}, home),
+    /already used its one rework.*--user-ok/);
+  const resumed = await retryJob(first, 'resume interrupted work', () => {}, home, undefined, { resume: true });
+  assert.equal(resumed.retryKind, 'resume');
+  assert.equal(resumed.processState, 'completed', resumed.error);
+  const second = await retryJob(first, 'second rework', () => {}, home, undefined, { userOk: true });
+  assert.equal(second.retryKind, 'rework');
+  assert.equal(second.processState, 'completed', second.error);
+});
+
+test('legacy retries without retryKind count as reworks', async t => {
+  const { options, home } = setup(t, 'legacy rework');
+  const job = await runJob(options, () => {}, home);
+  const legacy = await retryJob(job, 'legacy retry', () => {}, home);
+  const file = path.join(home, 'jobs', legacy.id, 'job.json');
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete record.retryKind;
+  fs.writeFileSync(file, JSON.stringify(record));
+  await assert.rejects(retryJob(readJob(legacy.id, home), 'another rework', () => {}, home),
+    /already used its one rework/);
+  const resumed = await retryJob(readJob(legacy.id, home), 'resume only', () => {}, home, undefined, { resume: true });
+  assert.equal(resumed.retryKind, 'resume');
+});
+
 test('a timer-delivered followup must cross a new wait barrier before shutdown', async t => {
   const { options, home } = setup(t, 'race');
   fs.writeFileSync(options.dshEntry, `
@@ -398,6 +428,31 @@ test('wait does not revive a request answered after the event scan', async t => 
   assert.deepEqual(waited.actionableRequests, []);
 });
 
+test('wait returns a pending request before an unreported context reminder', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-wait-context-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'), id = '00000000-0000-4000-8000-000000000070';
+  const dir = path.join(home, 'jobs', id), requestId = '00000000-0000-4000-8000-000000000071';
+  fs.mkdirSync(dir, { recursive: true });
+  const job = { version: 2, id, parentId: null, rootId: id, processState: 'running', supervisorPid: process.pid,
+    pendingRequests: [{ requestId, method: 'user-question/ask', params: {} }], answeredQuestions: 0,
+    context: { tokens: 200000, at: Date.now() }, contextLimit: 100,
+    contextReminder: { tokens: 200000, threshold: 100, at: Date.now() }, startedAt: Date.now(), review: null,
+    exitCode: null, reportedResult: null, cwd: root, reportFile: path.join(dir, 'report.txt'),
+    stderrFile: path.join(dir, 'stderr.log'), eventsFile: path.join(dir, 'events.jsonl') };
+  const jobFile = path.join(dir, 'job.json');
+  fs.writeFileSync(jobFile, JSON.stringify(job)); fs.writeFileSync(job.eventsFile, '');
+  const marker = path.join(dir, 'context.reported');
+  const request = await waitJob({ id }, 1, home);
+  assert.equal(request.reason, 'request');
+  assert.equal(fs.existsSync(marker), false);
+  job.pendingRequests = []; fs.writeFileSync(jobFile, JSON.stringify(job));
+  const context = await waitJob({ id }, 1, home);
+  assert.equal(context.reason, 'context');
+  assert.ok(fs.existsSync(marker));
+  job.processState = 'completed'; fs.writeFileSync(jobFile, JSON.stringify(job));
+  assert.equal((await waitJob({ id }, 1, home)).reason, 'finished');
+});
 test('run timeout rejects zero with the real allowed range', async t => {
   const { options, home } = setup(t, 'timeout range');
   for (const timeout of [0, 86401]) await assert.rejects(runJob({ ...options, timeout }, () => {}, home),
@@ -485,6 +540,42 @@ test('a null cost means unknown: it is accepted and neither summed nor counted',
   assert.equal(group.claudeCost, 0);
   assert.equal(group.claudeRecords, 0);
   assert.equal(group.deepseekRecords, 1);
+});
+
+test('context limit from the option and environment is recorded and inherited by retry', async t => {
+  const { options, home } = setup(t, 'context limit');
+  const job = await runJob({ ...options, contextLimit: 5 }, () => {}, home);
+  assert.equal(job.processState, 'completed', job.error);
+  assert.equal(job.contextLimit, 5);
+  assert.equal(job.context.tokens, 10);
+  assert.equal(job.contextReminder.threshold, 5);
+  const retry = await retryJob(job, 'again', () => {}, home);
+  assert.equal(retry.contextLimit, 5);
+  assert.equal(retry.processState, 'completed', retry.error);
+  const previous = process.env.DPSK_CONTEXT_LIMIT;
+  process.env.DPSK_CONTEXT_LIMIT = '7';
+  try {
+    const env = await runJob({ ...options, originalBrief: 'env context' }, () => {}, home);
+    assert.equal(env.contextLimit, 7);
+    assert.equal(env.contextReminder.threshold, 7);
+  } finally {
+    if (previous === undefined) delete process.env.DPSK_CONTEXT_LIMIT;
+    else process.env.DPSK_CONTEXT_LIMIT = previous;
+  }
+  await assert.rejects(runJob({ ...options, contextLimit: 0 }, () => {}, home), /context-limit must be a positive integer/);
+});
+
+test('status exposes question and context guard-rail fields', async t => {
+  const { options, home } = setup(t, 'status limits');
+  const job = await runJob({ ...options, contextLimit: 50 }, () => {}, home);
+  assert.equal(job.processState, 'completed', job.error);
+  const snapshot = status(job);
+  assert.equal(snapshot.answeredQuestions, 0);
+  assert.equal(snapshot.questionLimit, 3);
+  assert.equal(snapshot.questionCapLifted, false);
+  assert.equal(snapshot.contextLimit, 50);
+  assert.equal(snapshot.context.tokens, 10);
+  assert.equal(snapshot.contextReminder, null);
 });
 
 test('briefText uses the caller label in its errors', t => {

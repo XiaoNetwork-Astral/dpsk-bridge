@@ -35,6 +35,8 @@ dsb cancel <作业ID>
 
 审批的回复是 `{"outcome":"allowed-once"}`、`{"outcome":"rejected"}` 或 `{"outcome":"cancelled"}`。批不批准由宿主按自己实际拥有的权限决定，桥不会自动授予任何权限；需要用户拍板时先问用户。提问和审批由随作业加载的 Harness 插件转发；追加消息和实时日志由 SDK 负责。每个作业有独立的 SDK 进程。
 
+每个作业最多回答 3 个提问请求；审批请求不计入也不受限。第 4 个提问的回答会被拒绝，除非命令带 `--user-ok`。宿主应先告诉用户当前情况；用户决定继续后，用 `--user-ok` 重发这次回答，该作业之后的提问就不再受限。被限制时 `dsb wait` 返回 `escalate`，而不是 `request`；审批仍返回 `request`。`dsb status` 显示 `answeredQuestions` 和 `questionLimit`。
+
 `send`/`answer` 返回 `queued` 只表示消息进了邮箱，还要在事件里看到 `input_delivered` 或 `input_rejected` 才算有结果。通过文件通道转交给宿主插件的回答，会先出现 `input_forwarded`（已转交、等待处理），这不等于已送达，仍要继续等。追加的要求在下一轮生效，不会打断当前步骤。作业结束后不能再追加，应该新建任务或用 `retry`。
 
 ### 等待：dsb wait
@@ -46,9 +48,13 @@ dsb cancel <作业ID>
 - 作业结束：`finished`，包括 `cleanup_failed`；
 - 启动器意外退出：`unknown`；
 - 出现需要回复的问题或审批：`request`；
+- 提问数已达上限且没有 `--user-ok` 解除：`escalate`；
+- 上下文达到提醒阈值：`context`，每个作业只返回一次；
 - 超时：`timeout`。
 
-`--timeout` 默认 600 秒，范围 1–3600，而且不能超过宿主单次命令允许的时长。返回结果里的 `actionableRequests` 是还没回复的请求；`pendingRequests` 列出全部待处理请求。已经回复过的请求（回答在排队或已送达）不会再让 `wait` 返回 `request`，除非之后出现 `input_rejected`。`wait` 返回只说明发生了什么，不代表成功，仍然要读结果并验收。
+`--timeout` 默认 600 秒，范围 1–3600，而且不能超过宿主单次命令允许的时长。返回结果里的 `actionableRequests` 是还没回复的请求；`pendingRequests` 列出全部待处理请求。已经回复过的请求（回答在排队或已送达）不会再让 `wait` 返回 `request`，除非之后出现 `input_rejected`。有请求或 `escalate` 时先返回它们，`context` 在之后一次 `wait` 返回；作业已经结束时直接返回 `finished`，不再提醒上下文；返回过 `context` 后会在作业目录写一个标记文件，不再重复。`wait` 返回只说明发生了什么，不代表成功，仍然要读结果并验收。
+
+上下文提醒的阈值默认 200000 token，可以用 `dsb run --context-limit <TOKENS>` 或环境变量 `DPSK_CONTEXT_LIMIT` 调整；`retry` 沿用原作业的值。每条带用量的助手消息都会刷新 `status.context`（`inputTokens + cacheReadTokens + cacheWriteTokens`）；第一次达到阈值时记录 `status.contextReminder` 和 `context_reminder` 事件，作业继续运行。`dsb status` 同时显示 `context` 和 `contextLimit`。
 
 ### 实验功能：--notify-cmd
 
@@ -72,6 +78,7 @@ dsb cancel <作业ID>
 
 ```text
 dsb retry <作业ID> --feedback "失败证据.md"
+dsb retry <作业ID> --feedback "超时后继续.md" --resume
 dsb review <作业ID> --verdict accepted --note "实际检查与测试证据"
 dsb stats
 ```
@@ -79,6 +86,8 @@ dsb stats
 作业、完整报告、前后 Git 状态、交互事件和用量保存在 `$DSH_HOME/bridge/jobs/<ID>/`，默认是 `~/.dsh/bridge/jobs/<ID>/`。Git 状态清单不是备份。进程状态（processState）、模型自报的结果（reportedResult）和宿主的验收结论，三者互相独立。
 
 返工会保留原始要求和配置摘要，新开一个会话；作业保存的 brief 副本或原 MCP patch 文件变了就要求新建任务，改源 brief 文件不会触发这个检查。失败或报告不是 OK 的作业不能标为 accepted。用量只统计匹配的根会话，缺失的数据不当作零，也不代表包含全部子代理的账单。
+
+同一个任务（共享 `rootId` 的作业）只允许 1 次返工；带 `parentId` 但没有 `retryKind` 的旧作业也算一次返工。第二次返工会被拒绝，除非命令带 `--user-ok`：宿主应先告诉用户当前状态、已经试过什么和失败证据，用户决定继续后用 `--user-ok` 重发。`--resume` 表示只继续被超时或未回答提问中断的工作，不算返工，也不受限；`retryKind` 记录为 `rework` 或 `resume`。
 
 ## 并发
 

@@ -30,12 +30,13 @@ try {
       else if (command === 'cancel') emit(cancelJob(job));
       else if (command === 'unlock') emit(await unlockJob(job, options.confirmedStopped));
       else if (command === 'send') emit(sendMessage(job, briefText(options.messageFile, 'Message')));
-      else if (command === 'answer') emit(answerRequest(job, options.request, JSON.parse(briefText(options.answer, 'Answer'))));
+      else if (command === 'answer') emit(answerRequest(job, options.request, JSON.parse(briefText(options.answer, 'Answer')), undefined, !!options.userOk));
       else if (command === 'events') emit(eventsPage(job, options.after, options.limit));
       else if (command === 'review') emit(reviewJob(job, options.verdict, options.note, undefined,
         options.accounting ? JSON.parse(fs.readFileSync(options.accounting, 'utf8').replace(/^\uFEFF/, '')) : null));
       else if (command === 'retry') {
-        const next = await retryJob(job, briefText(options.feedback, 'Feedback'), emit, undefined, options.notifyCmd);
+        const next = await retryJob(job, briefText(options.feedback, 'Feedback'), emit, undefined, options.notifyCmd,
+          { userOk: !!options.userOk, resume: !!options.resume });
         emit({ event: 'finished', ...result(next) });
         process.exitCode = next.processState === 'completed' && next.reportedResult === 'OK' ? 0 : 1;
       } else throw new Error(`Unknown command: ${command}`);

@@ -173,6 +173,21 @@ test('help has no Notes section and keeps essentials in option descriptions', ()
   assert.match(flat(commandHelp('answer')), /--request <REQUEST_ID>.*--answer <JSON_FILE>/);
 });
 
+test('guard-rail flags parse and appear in help', () => {
+  const id = '00000000-0000-4000-8000-000000000060';
+  assert.equal(parseCommand('answer', [id, '--request', 'req', '--answer', 'answer.json', '--user-ok']).options.userOk, true);
+  const retry = parseCommand('retry', [id, '--feedback', 'feedback.md', '--resume', '--user-ok']);
+  assert.equal(retry.options.resume, true);
+  assert.equal(retry.options.userOk, true);
+  assert.equal(parseCommand('run', ['--brief', 'brief.md', '--context-limit', '5000']).options.contextLimit, '5000');
+  const flat = text => text.replace(/\s+/g, ' ');
+  assert.match(flat(commandHelp('answer')), /--user-ok.*3-question job cap/);
+  assert.match(flat(commandHelp('retry')), /--resume.*timeout or unanswered question/);
+  assert.match(flat(commandHelp('retry')), /--user-ok.*one-rework task cap/);
+  assert.match(flat(commandHelp('run')), /--context-limit <TOKENS>.*DPSK_CONTEXT_LIMIT/);
+  assert.match(flat(rootHelp()), /DPSK_CONTEXT_LIMIT Default context reminder threshold/);
+});
+
 test('long descriptions wrap to 100 columns by default and remain aligned', () => {
   const helps = [rootHelp(), ...COMMANDS.map(item => commandHelp(item.name))];
   for (const help of helps) {
