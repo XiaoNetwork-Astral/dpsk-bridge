@@ -5,8 +5,9 @@
  * This module is the only place that owns the install layout: the Git
  * checkout stays the install root (linked with `npm link`), while host skills,
  * ownership manifests and the install record live under `~/.dpsk-bridge`.
- * It intentionally imports Node built-ins only: `install` runs before the
- * checkout's own `npm ci`, when `node_modules` may not exist yet.
+ * It intentionally imports dependency-free modules only: `install` runs before
+ * the checkout's own `npm ci`, when `node_modules` may not exist yet. The
+ * scheduler is imported for the same reason it is dependency-free.
  *
  * Commands: install, upgrade, uninstall, sync.
  * The thin `installer.ps1` / `installer.sh` wrappers must call this file with
@@ -18,6 +19,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { acquireSlot } from '../lib/scheduler.mjs';
 
 const scriptFile = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptFile);
@@ -848,6 +850,30 @@ function applyLocalUpgrade(tag, target) {
 // Commands
 // ---------------------------------------------------------------------------
 
+// Same scheduler home, exclusive reservation and bounded wait as dsv update
+// (lib/updater.mjs): an upgrade must not change the checkout under a running job.
+const updateQueueTimeoutMs = 60000;
+
+function schedulerHome() {
+  return path.resolve(process.env.DSH_HOME || path.join(home, '.dsh'), 'bridge');
+}
+
+async function reserveUpdate() {
+  const timer = setTimeout(() => step('!', 'Waiting for active bridge jobs before updating'), 1000);
+  try {
+    return await acquireSlot({
+      home: schedulerHome(), id: `installer-update-${crypto.randomUUID()}`,
+      workspace: checkoutRoot, exclusive: true, maxConcurrent: 1, queueTimeoutMs: updateQueueTimeoutMs,
+    });
+  } catch (error) {
+    if (error?.code === 'QUEUE_TIMEOUT') {
+      fail('Scheduler queue wait timed out',
+        'Wait for running dsb jobs to finish (dsv lists them), then retry the upgrade');
+    }
+    throw error;
+  } finally { clearTimeout(timer); }
+}
+
 function printHelp() {
   let version = 'unknown';
   try { version = JSON.parse(fs.readFileSync(packageFile, 'utf8')).version || version; } catch {}
@@ -916,31 +942,45 @@ async function upgradeCommand({ targets, skillsDir }) {
   assertUpgradeReady(official);
   const tag = await latestReleaseTag(official);
   const targetVersion = stableTagVersion(tag);
-  if (compareVersions(targetVersion, from) <= 0) {
-    step('✓', `Already on ${from}; no upgrade needed`);
-  } else {
-    if (!upgradeTagOverride) {
-      const fetch = git(['fetch', '--no-tags', '--no-recurse-submodules', 'origin', `refs/tags/${tag}:refs/tags/${tag}`],
-        { allowFailure: true });
-      if (fetch.status !== 0) fail(`Cannot fetch release ${tag}`, `git -C "${checkoutRoot}" fetch origin tag ${tag}`);
+  // The reservation is taken only when the checkout is about to change, and is
+  // held through dependency setup and skill sync, exactly like dsv update.
+  let reservation = null;
+  try {
+    if (compareVersions(targetVersion, from) <= 0) {
+      step('✓', `Already on ${from}; no upgrade needed`);
+    } else {
+      reservation = await reserveUpdate();
+      // Another updater may have finished while this one waited for the jobs.
+      const current = readPackage().version;
+      if (compareVersions(targetVersion, current) <= 0) {
+        step('✓', `Already on ${current}; no upgrade needed`);
+      } else {
+        if (!upgradeTagOverride) {
+          const fetch = git(['fetch', '--no-tags', '--no-recurse-submodules', 'origin', `refs/tags/${tag}:refs/tags/${tag}`],
+            { allowFailure: true });
+          if (fetch.status !== 0) fail(`Cannot fetch release ${tag}`, `git -C "${checkoutRoot}" fetch origin tag ${tag}`);
+        }
+        applyLocalUpgrade(tag, targetVersion);
+        step('✓', `Upgraded ${current} → ${targetVersion}`, tag);
+      }
     }
-    applyLocalUpgrade(tag, targetVersion);
-    step('✓', `Upgraded ${from} → ${targetVersion}`, tag);
+    pkg = readPackage({ requireDshVersion: true });
+    migrateLegacyManifests();
+    installDependencies();
+    ensureDsh(pkg.dshVersion);
+    if (!hosts.length) {
+      step('!', 'No host detected; installed the shared commands only');
+    } else {
+      syncHosts(hosts);
+    }
+    ensureLink(pkg.version);
+    writeJson(installRecordFile, { version: pkg.version, root: checkoutRoot, installedAt: new Date().toISOString() });
+    step('✓', 'Install record written', installRecordFile);
+    summary(hosts);
+    return 0;
+  } finally {
+    if (reservation) await reservation.release();
   }
-  pkg = readPackage({ requireDshVersion: true });
-  migrateLegacyManifests();
-  installDependencies();
-  ensureDsh(pkg.dshVersion);
-  if (!hosts.length) {
-    step('!', 'No host detected; installed the shared commands only');
-  } else {
-    syncHosts(hosts);
-  }
-  ensureLink(pkg.version);
-  writeJson(installRecordFile, { version: pkg.version, root: checkoutRoot, installedAt: new Date().toISOString() });
-  step('✓', 'Install record written', installRecordFile);
-  summary(hosts);
-  return 0;
 }
 
 async function uninstallCommand({ targets, all, skillsDir }) {

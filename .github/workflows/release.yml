@@ -24,9 +24,9 @@ jobs:
       - run: npm run check
       - run: npm test
       - run: npm pack --ignore-scripts
-      - run: sha256sum dpsk-bridge-*.tgz > SHA256SUMS
+      - run: sha256sum dpsk-bridge-*.tgz installer.sh installer.ps1 > SHA256SUMS
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dpsk-bridge-*.tgz SHA256SUMS --verify-tag --title "dpsk-bridge $RELEASE_TAG" --generate-notes
+        run: gh release create "$RELEASE_TAG" dpsk-bridge-*.tgz installer.sh installer.ps1 SHA256SUMS --verify-tag --title "dpsk-bridge $RELEASE_TAG" --generate-notes

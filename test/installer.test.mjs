@@ -5,7 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { acquireSlot } from '../lib/scheduler.mjs';
 
 const repoRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const installer = path.join(repoRoot, 'scripts', 'installer-core.mjs');
@@ -33,6 +34,7 @@ function environment(home, extra = {}) {
     USERPROFILE: home,
     npm_config_prefix: prefix,
     NPM_CONFIG_PREFIX: prefix,
+    DSH_HOME: path.join(home, '.dsh'),
     DPSK_INSTALLER_SKIP_SYSTEM: '1',
     NO_COLOR: '1',
     TERM: 'dumb',
@@ -74,8 +76,11 @@ function upgradeCheckout(t) {
   t.after(() => fs.rmSync(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
   const repository = path.join(base, 'repo');
   fs.mkdirSync(path.join(repository, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(repository, 'lib'), { recursive: true });
   fs.copyFileSync(installer, path.join(repository, 'scripts', 'installer-core.mjs'));
   fs.copyFileSync(path.join(repoRoot, 'scripts', 'host-presets.json'), path.join(repository, 'scripts', 'host-presets.json'));
+  fs.copyFileSync(path.join(repoRoot, 'lib', 'scheduler.mjs'), path.join(repository, 'lib', 'scheduler.mjs'));
+  fs.copyFileSync(path.join(repoRoot, 'lib', 'job-state.mjs'), path.join(repository, 'lib', 'job-state.mjs'));
   fs.cpSync(path.join(repoRoot, 'skill'), path.join(repository, 'skill'), { recursive: true });
   const pkg = {
     name: 'dpsk-bridge', version: '0.4.0', repository: { url: `git+${officialOrigin}` },
@@ -247,6 +252,54 @@ test('upgrade fast-forwards a 0.4.x-style install and reuses its recorded hosts'
   const record = readJson(path.join(state, 'install.json'));
   assert.equal(record.version, '0.5.0');
   assert.equal(fs.realpathSync.native(record.root), fs.realpathSync.native(repository));
+});
+
+test('upgrade waits for running bridge jobs before changing the checkout', async t => {
+  const { repository, home } = upgradeCheckout(t);
+  fs.mkdirSync(home, { recursive: true });
+  git(repository, ['init']);
+  git(repository, ['add', '.']);
+  git(repository, ['commit', '-m', '0.4.0']);
+  const oldHead = git(repository, ['rev-parse', 'HEAD']);
+  commitVersion(repository, '0.5.0', { dshVersion: packageJson.dshVersion });
+  git(repository, ['tag', 'v0.5.0']);
+  git(repository, ['checkout', '-b', 'installed', oldHead]);
+  git(repository, ['remote', 'add', 'origin', officialOrigin]);
+
+  const core = path.join(repository, 'scripts', 'installer-core.mjs');
+  const slot = await acquireSlot({ home: path.join(home, '.dsh', 'bridge'), id: 'running-job', workspace: repository });
+  const child = spawn(process.execPath, [core, 'upgrade'], {
+    cwd: repository, windowsHide: true, env: environment(home, { DPSK_INSTALLER_UPGRADE_TAG: 'v0.5.0' }),
+  });
+  let stdout = '', stderr = '';
+  child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+  child.stdout.on('data', chunk => { stdout += chunk; });
+  child.stderr.on('data', chunk => { stderr += chunk; });
+  const closed = new Promise(resolve => child.once('close', resolve));
+  const waiting = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`upgrade did not report the wait:\n${stdout}${stderr}`)), 15000);
+    child.stdout.on('data', () => {
+      if (!stdout.includes('Waiting for active bridge jobs before updating')) return;
+      clearTimeout(timer); resolve();
+    });
+    child.once('close', code => {
+      clearTimeout(timer);
+      reject(new Error(`upgrade exited ${code} without reporting the wait:\n${stdout}${stderr}`));
+    });
+  });
+
+  let code;
+  try {
+    await waiting;
+    assert.equal(readJson(path.join(repository, 'package.json')).version, '0.4.0',
+      'the checkout must not change while an active job holds the reservation');
+  } finally {
+    await slot.release();
+    code = await closed;
+  }
+  assert.equal(code, 0, stdout + stderr);
+  assert.match(stdout, /Upgraded 0\.4\.0 → 0\.5\.0/);
+  assert.equal(readJson(path.join(repository, 'package.json')).version, '0.5.0');
 });
 
 test('upgrade refuses a dirty checkout and diverged history', async t => {
