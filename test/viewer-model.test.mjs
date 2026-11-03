@@ -51,13 +51,13 @@ test('tool summaries prefer descriptions then project-relative paths then comman
     call(3, 'path', 'read_file', { path: 'c:\\repo\\src\\main.ts' }),
     call(4, 'fallback', 'custom', { nested: { giant: 'not a useful summary' } })]);
   assert.equal(nodes[0].summary, '验证构建'); assert.equal(nodes[1].summary, 'src/main.ts');
-  assert.equal(nodes[2].summary, '执行工具'); assert.equal(nodes[2].toolLabel, 'custom');
+  assert.equal(nodes[2].summary, ''); assert.equal(nodes[2].toolLabel, 'custom');
   assert.match(nodes[2].text, /not a useful summary/);
 });
 
 test('orphan results retain content and later calls merge into the same stable node', () => {
   const first = projectTranscript([result(1, 'late', 'preserve output')]);
-  assert.equal(first[0].summary, '未找到调用记录');
+  assert.equal(first[0].summary, 'Call record not found');
   const next = projectTranscript([result(1, 'late', 'preserve output'), call(2, 'late', 'shell', { command: 'pwd' })]);
   assert.equal(next.length, 1); assert.equal(next[0].key, first[0].key);
   assert.equal(next[0].summary, 'pwd'); assert.match(next[0].text, /preserve output/);
@@ -118,7 +118,7 @@ test('reasoning is opt-in and does not change answer keys or final detection', (
   const plain = projectTranscript(rows), expanded = projectTranscript(rows, { reasoning: true });
   assert.equal(plain.length, 1); assert.ok(!plain[0].text.includes('private thought'));
   assert.equal(expanded.find(node => node.kind === 'final').key, plain[0].key);
-  assert.match(expanded.find(node => node.title === '思考').text, /private thought\nfull detail/);
+  assert.match(expanded.find(node => node.title === 'Thinking').text, /private thought\nfull detail/);
 });
 
 test('bridge report trailers are stripped while the complete original brief and retry feedback remain available', () => {
@@ -126,7 +126,7 @@ test('bridge report trailers are stripped while the complete original brief and 
   const value = `${brief}\n\n【桥接报告约定】\n桥接内部约定\n\n【返工信息】\n修复测试失败，保留已有成果。\n\n[bridge-task:fixture]\n`;
   const nodes = projectTranscript([user(1, value)]);
   assert.equal(nodes[0].text, brief); assert.equal(nodes[0].kind, 'task');
-  assert.equal(nodes[1].title, '返工补充'); assert.equal(nodes[1].text, '修复测试失败，保留已有成果。');
+  assert.equal(nodes[1].title, 'Rework notes'); assert.equal(nodes[1].text, '修复测试失败，保留已有成果。');
   assert.ok(nodes.every(node => !node.text.includes('桥接内部约定') && !node.text.includes('bridge-task:')));
 });
 
@@ -144,7 +144,7 @@ test('repetitive plan tools collapse into one stable node per turn with all upda
   const rows = [start(1), call(2, 'p1', 'todo_write', { todos: [{ content: 'first task', status: 'pending' }] }), result(3, 'p1', 'first saved'),
     call(4, 'p2', 'todo_write', { todos: [{ content: 'second task', status: 'completed' }] }), result(5, 'p2', 'second saved')];
   const pending = projectTranscript(rows.slice(0, 2)), [node] = projectTranscript(rows);
-  assert.equal(node.key, pending[0].key); assert.equal(node.kind, 'note'); assert.equal(node.summary, '计划更新 2 次');
+  assert.equal(node.key, pending[0].key); assert.equal(node.kind, 'note'); assert.equal(node.title, 'Plan'); assert.equal(node.summary, '2 updates');
   for (const value of ['first task', 'second task', 'first saved', 'second saved']) assert.ok(node.text.includes(value));
   const extended = projectTranscript([...rows, end(6), start(7, 2), call(8, 'p3', 'todo_write', { todos: [] }, 2)]);
   assert.equal(extended.length, 2); assert.notEqual(extended[0].key, extended[1].key); assert.equal(extended[1].turn, 2);
@@ -153,7 +153,7 @@ test('repetitive plan tools collapse into one stable node per turn with all upda
 test('plan errors stay visible instead of being hidden among successful updates', () => {
   const [node] = projectTranscript([start(1), call(2, 'p1', 'todo_write', { todos: [] }), result(3, 'p1', 'could not save', true),
     call(4, 'p2', 'todo_write', { todos: [] }), result(5, 'p2', 'saved')]);
-  assert.equal(node.kind, 'error'); assert.equal(node.state, 'error'); assert.match(node.summary, /含失败/); assert.match(node.text, /could not save/);
+  assert.equal(node.kind, 'error'); assert.equal(node.state, 'error'); assert.match(node.summary, /^2 updates, failed: could not save/); assert.match(node.text, /could not save/);
 });
 
 test('questions are prominent pending nodes with complete options and merged answers', () => {
@@ -170,7 +170,7 @@ test('structured turn failures and non-text attachments keep their actual inform
   const nodes = projectTranscript([start(1), answer, end(3, 1, { kind: 'error', error: { code: 'UNKNOWN', message: 'provider failure' } })]);
   assert.equal(nodes.find(node => node.kind === 'final').tone, 'error');
   assert.ok(nodes.some(node => node.text.includes('https://example.test/image.png')));
-  const failure = nodes.find(node => node.title === '执行失败');
+  const failure = nodes.find(node => node.title === 'Run failed');
   assert.equal(failure.summary, 'provider failure'); assert.match(failure.text, /UNKNOWN/); assert.match(failure.text, /provider failure/);
 });
 
@@ -184,4 +184,16 @@ test('projection does not mutate events and node identity survives visibility ch
     for (const field of ['key', 'kind', 'title', 'summary', 'text', 'tone', 'state']) assert.equal(typeof node[field], 'string', field);
     assert.equal(typeof node.expandable, 'boolean');
   }
+});
+
+test('current English bridge sections are stripped like the legacy Chinese ones', async () => {
+  const { PROMPT_MARKERS } = await import('../lib/bridge.mjs');
+  const { shortTitle } = await import('../lib/viewer/blocks.mjs');
+  const brief = 'Implement the feature.\nKeep this paragraph.\nMentioning [dpsk-bridge report contract] inline is not a trailer.';
+  const value = `${brief}\n\n${PROMPT_MARKERS.images}\nThis task includes 1 image, in order: a.png\n\n${PROMPT_MARKERS.contract}\nINTERNAL_CONTRACT\n\n${PROMPT_MARKERS.scope}\nWorkspace root: /w\n\n${PROMPT_MARKERS.rework}\nFix the failing test.\n\n[bridge-task:fixture]\n`;
+  const nodes = projectTranscript([user(1, value)]);
+  assert.equal(nodes[0].text, brief); assert.equal(nodes[0].kind, 'task');
+  assert.equal(nodes[1].title, 'Rework notes'); assert.equal(nodes[1].text, 'Fix the failing test.');
+  assert.ok(nodes.every(node => !/INTERNAL_CONTRACT|attached images|bridge-task:/.test(node.text)));
+  assert.equal(shortTitle(`Do it\n${PROMPT_MARKERS.contract}\nINTERNAL`), 'Do it');
 });

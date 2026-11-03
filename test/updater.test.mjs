@@ -4,8 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { checkForUpdate, readUpdateSettings, setAutoUpdate, applyUpdate, recoverUpdate } from '../lib/updater.mjs';
+import { checkForUpdate, readUpdateSettings, setAutoUpdate, applyUpdate, recoverUpdate, officialOrigin, officialRepository } from '../lib/updater.mjs';
 import { acquireSlot } from '../lib/scheduler.mjs';
+
+const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const officialRepo = packageJson.repository.url.replace(/^git\+/, '').replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-updater-'));
@@ -19,6 +22,53 @@ const release = (tag = 'v0.5.0', extra = {}) => new Response(JSON.stringify({ ta
 const update = { available: true, current: '0.4.0', latest: '0.5.0', tag: 'v0.5.0' };
 const offline = async () => { throw new Error('offline'); };
 
+test('package metadata and official repository resolution use a single source', () => {
+  assert.equal(packageJson.repository.url, 'git+https://github.com/XiaoNetwork-Astral/dpsk-bridge.git');
+  assert.equal(packageJson.homepage, 'https://github.com/XiaoNetwork-Astral/dpsk-bridge');
+  assert.equal(packageJson.bugs.url, 'https://github.com/XiaoNetwork-Astral/dpsk-bridge/issues');
+  assert.equal(officialRepository(), officialRepo);
+  assert.equal(officialRepo, 'XiaoNetwork-Astral/dpsk-bridge');
+  for (const origin of [
+    `https://github.com/${officialRepo}`,
+    `https://github.com/${officialRepo}.git`,
+    `https://GITHUB.COM/${officialRepo.toUpperCase()}.git`,
+    `git@github.com:${officialRepo}`,
+    `git@github.com:${officialRepo}.git`,
+    `ssh://git@github.com/${officialRepo}`,
+    `ssh://git@github.com/${officialRepo}.git`,
+  ]) assert.equal(officialOrigin(origin, officialRepo), true, origin);
+  for (const origin of [
+    'https://example.com/XiaoNetwork-Astral/dpsk-bridge.git',
+    `https://github.com/${officialRepo}/extra`,
+    'https://github.com/XiaoNetwork-Astral/not-dpsk-bridge.git',
+    `http://github.com/${officialRepo}.git`,
+    `https://user@github.com/${officialRepo}.git`,
+    `https://user:pass@github.com/${officialRepo}.git`,
+    `https://github.com:8443/${officialRepo}.git`,
+    `https://github.com/${officialRepo}.git?x=1`,
+    `https://github.com/${officialRepo}.git#x`,
+    `ssh://other@github.com/${officialRepo}.git`,
+    `ssh://git:pass@github.com/${officialRepo}.git`,
+    `git@gitlab.com:${officialRepo}.git`,
+  ]) assert.equal(officialOrigin(origin, officialRepo), false, origin);
+});
+
+test('missing or invalid repository metadata gives a clear update error', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-updater-repository-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }));
+  const file = path.join(directory, 'package.json');
+  assert.throws(() => officialRepository(file), /Cannot read or parse updater package\.json/);
+  fs.writeFileSync(file, '{not json');
+  assert.throws(() => officialRepository(file), /Cannot read or parse updater package\.json/);
+  fs.writeFileSync(file, JSON.stringify({ name: 'dpsk-bridge' }));
+  assert.throws(() => officialRepository(file), /repository\.url/);
+  fs.writeFileSync(file, JSON.stringify({ repository: { url: 'https://example.com/owner/repo.git' } }));
+  assert.throws(() => officialRepository(file), /GitHub repository/);
+  const f = fixture(t), result = await checkForUpdate({ ...f, force: true, packageFile: file, fetchImpl: release });
+  assert.equal(result.available, false);
+  assert.match(result.error, /GitHub repository/);
+});
+
 test('update settings default to opt-in and persist explicit changes', t => {
   const f = fixture(t);
   assert.equal(readUpdateSettings(f.home).autoUpdate, false);
@@ -30,10 +80,10 @@ test('update settings default to opt-in and persist explicit changes', t => {
 
 test('stable semantic versions, six-hour cache, force, and offline cached availability', async t => {
   const f = fixture(t); let calls = 0;
-  const fetchImpl = async (url, options) => { calls++; assert.match(url, /AAAA9731\/dpsk-bridge\/releases\/latest$/); assert.ok(options.signal); return release(); };
+  const fetchImpl = async (url, options) => { calls++; assert.ok(url.endsWith(`/${officialRepo}/releases/latest`), url); assert.ok(options.signal); return release(); };
   const first = await checkForUpdate({ ...f, now: 1000, fetchImpl });
   assert.equal(first.available, true); assert.equal(first.current, '0.4.0'); assert.equal(first.latest, '0.5.0');
-  assert.equal(first.url, 'https://github.com/AAAA9731/dpsk-bridge/releases/tag/v0.5.0');
+  assert.equal(first.url, `https://github.com/${officialRepo}/releases/tag/v0.5.0`);
   await checkForUpdate({ ...f, now: 2000, fetchImpl }); assert.equal(calls, 1);
   await checkForUpdate({ ...f, now: 3000, force: true, fetchImpl }); assert.equal(calls, 2);
   const failed = await checkForUpdate({ ...f, now: 3000 + 7 * 3600000, fetchImpl: offline });
@@ -70,7 +120,7 @@ function repository(t) {
   fs.writeFileSync(path.join(f.root, 'package.json'), JSON.stringify({ name: 'dpsk-bridge', version: '0.5.0' }));
   git(f.root, ['add', 'package.json']); git(f.root, ['commit', '-m', 'release version']); git(f.root, ['tag', 'v0.5.0']);
   git(f.root, ['checkout', '-b', 'installed', installed]);
-  git(f.root, ['remote', 'add', 'origin', 'https://github.com/AAAA9731/dpsk-bridge.git']);
+  git(f.root, ['remote', 'add', 'origin', `https://github.com/${officialRepo}.git`]);
   const commands = [];
   const run = async (command, args, options) => {
     commands.push([command, args]);
@@ -99,11 +149,13 @@ test('updates a real clean checkout by fast-forward and invokes npm through Node
 });
 
 test('refuses dirty or wrong-origin checkouts before fetch and releases the mutex', async t => {
-  for (const kind of ['dirty', 'origin', 'old-name']) {
+  for (const kind of ['dirty', 'origin', 'other-repo', 'other-owner']) {
     await t.test(kind, async t => {
       const f = repository(t);
       if (kind === 'dirty') fs.writeFileSync(path.join(f.root, 'untracked'), 'local data');
-      else git(f.root, ['remote', 'set-url', 'origin', kind === 'origin' ? 'https://example.com/AAAA9731/dpsk-bridge.git' : 'https://github.com/AAAA9731/claude-deepseek-bridge.git']);
+      else git(f.root, ['remote', 'set-url', 'origin', kind === 'origin' ? `https://example.com/${officialRepo}.git`
+        : kind === 'other-repo' ? `https://github.com/${officialRepo.split('/')[0]}/not-dpsk-bridge.git`
+        : 'https://github.com/someone-else/dpsk-bridge.git']);
       await assert.rejects(applyUpdate(update, f), kind === 'dirty' ? /local changes|untracked/ : /official/);
       assert.equal(f.commands.some(([, args]) => args.includes('fetch')), false); assert.deepEqual(reservations(f), []);
       assert.equal(git(f.root, ['rev-parse', 'HEAD']), f.installed);

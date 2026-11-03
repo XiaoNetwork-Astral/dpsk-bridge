@@ -95,7 +95,8 @@ test('images are sent as base64 blocks after the text block and recorded without
   const blocks = JSON.parse(fs.readFileSync(capture, 'utf8'));
   assert.equal(blocks.length, 3);
   assert.equal(blocks[0].type, 'text');
-  assert.match(blocks[0].text, /【附带图片】本任务附带 2 张图片\(按顺序\):first\.png、second\.jpg。/);
+  assert.ok(blocks[0].text.includes('[dpsk-bridge attached images]\nThis task includes 2 images, in order: first.png, second.jpg'));
+  assert.ok(blocks[0].text.includes('Use standard English for your reports'), 'DeepSeek is asked to answer in English');
   assert.equal(blocks[0].text.includes(pngFile), false);
   assert.equal(blocks[1].type, 'image');
   assert.equal(blocks[1].mimeType, 'image/png');
@@ -117,7 +118,7 @@ test('a job without images sends exactly one text block', async t => {
   const prompt = fs.readFileSync(path.join(path.dirname(job.reportFile), 'prompt.txt'), 'utf8');
   assert.deepEqual(JSON.parse(fs.readFileSync(capture, 'utf8')), [{ type: 'text', text: prompt }]);
   assert.deepEqual(job.images, []);
-  assert.doesNotMatch(prompt, /【附带图片】/);
+  assert.ok(!prompt.includes('[dpsk-bridge attached images]'));
 });
 
 test('a non-image file is rejected before dsh starts or job files are written', async t => {

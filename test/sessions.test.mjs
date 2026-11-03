@@ -174,7 +174,7 @@ test('CLI renders current v4 tool results, system/developer events, structured e
   write(root, 'sessions/project/id/session.v4.jsonl', jsonl(rows));
   const result = spawnSync(process.execPath, [cli, 'show', 'latest', '--all', '--full'], { encoding: 'utf8', env: { ...process.env, DSH_HOME: root, DSH_SESSIONS_ROOT: '' } });
   assert.equal(result.status, 0, result.stderr);
-  for (const value of ['current prompt', 'system context', 'developer update', 'native tool output', 'final response', 'structured failure', '输入 10', '1 个错误']) assert.ok(result.stdout.includes(value), value);
+  for (const value of ['current prompt', 'system context', 'developer update', 'native tool output', 'final response', 'structured failure', 'input 10', '1 error']) assert.ok(result.stdout.includes(value), value);
 });
 
 test('CLI reads current compressed sessions from a configured root', t => {
