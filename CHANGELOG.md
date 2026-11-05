@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-11-05
+
+### Fixed
+
+- The `deepseek-delegate` skill no longer sends every host into a blocking foreground `dsb wait`. Hosts that can notify the agent when a command returns now run the wait in the background or through a monitor, so the agent keeps working and stays available to the user while still receiving dsh's questions during the run.
+
 ## [0.5.0] - 2026-11-03
 
 ### Breaking
