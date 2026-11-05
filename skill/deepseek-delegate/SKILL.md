@@ -72,15 +72,19 @@ The host names below are examples. A host that is not listed follows the "Any ho
 
 | Host | Start and wait |
 |---|---|
-| Any host | Use the available background command or process session interface, keep the handle, and wait with `dsb wait` (below), handling questions and permission requests after each return. |
-| Claude Code | Example: if the Bash tool supports `run_in_background: true`, start with it and record the background task ID; otherwise follow the "Any host" row. Read bridge events and answer requests during the run, and read the result at the end. |
+| Any host | Use the available background command or process session interface, keep the handle, and wait with `dsb wait` the way the paragraphs below describe, handling questions and permission requests after each return. |
+| Claude Code | Example: if the Bash tool supports `run_in_background: true`, start `dsb run` with it and record the background task ID. If a Monitor tool is available, run `dsb wait <ID> --timeout 1700` through it with `timeout_ms` 1800000, so the wait's output arrives as a notification while you keep working. Without Monitor, run the same wait with `run_in_background: true` and read `dsb status <ID>` when it ends. Otherwise follow the "Any host" row. |
 | Codex | Run with the available command execution tool. If it offers `exec_command` / `write_stdin`, set a bounded `yield_time_ms`, keep the returned `session_id`, and read later output with `write_stdin`. |
 
 The host's background task list shows both the host agent's own commands and dsh jobs. When the host lets you name or describe the background command for `dsb run` / `dsb retry`, start the description with `[dpsk-bridge]` (for example `[dpsk-bridge] Investigate the login failure`) so the user can tell at a glance what dsh is doing. The prefix belongs in the host's task description only, outside the brief.
 
 If your command tool can return output only after the command ends, you cannot answer questions or approvals mid-run. Set `dsb run --time-limit` to an acceptable upper limit, read the result with `dsb result <ID>` afterwards, and dispatch only tasks that need no decisions midway. If a question causes a timeout, dispatch again with `dsb retry --resume`, which resumes the interrupted work and does not count as the task's rework ("Review and rework").
 
-Wait with `dsb wait <ID> --timeout <seconds>`, with `dsb run` in the background or a process session. It reads only local files and makes no model call; it returns once when the job ends, when a request needs an answer or the user's decision, when the job's context reaches its reminder threshold, or when the timeout passes. Each `status` or `events` check costs the host agent a turn, so use `wait` for waiting and those commands for reading after it returns. The wait's `--timeout` defaults to 600, ranges 1–3600, and must fit within what the host allows for a single command; it is separate from the job's own `--time-limit`. Act on the returned `reason`:
+Wait with `dsb wait <ID> --timeout <seconds>`, with `dsb run` in the background or a process session. It reads only local files and makes no model call; it returns once when the job ends, when a request needs an answer or the user's decision, when the job's context reaches its reminder threshold, or when the timeout passes. Each `status` or `events` check costs the host agent a turn, so use `wait` for waiting and those commands for reading after it returns. The wait's `--timeout` defaults to 600, ranges 1–3600, and must fit within what the host allows for a single command; it is separate from the job's own `--time-limit`.
+
+Whenever the host can notify the host agent that a command returned, through a background command or a monitor, run `dsb wait` that way too. The host agent then keeps working and stays available to the user during the job, and starts the next wait after handling each return. Run the wait in the foreground only when the host has no such notification. A notification for `dsb run` alone arrives when the job ends, so keep a wait running as well; it is what brings dsh's questions to you during the run.
+
+Act on the returned `reason`:
 
 - `timeout`: wait again.
 - `request`: handle it with `dsb events` and `dsb answer` first. `actionableRequests` lists requests not yet answered; answered ones do not return again.
