@@ -110,7 +110,7 @@ Command-line options take precedence over environment variables, and `dsb retry`
 | `DPSK_CONTEXT_LIMIT`       | Context reminder threshold (tokens)                 | `200000`            |
 | `DSH_HOME`                 | `dsh` home directory (jobs in `$DSH_HOME/bridge`)   | `~/.dsh`            |
 
-Jobs take turns starting: one starts at a time by default, and they run concurrently once up. `DPSK_START_CONCURRENCY` changes how many may start at once; the smallest value among participating launchers applies, like `DPSK_CONCURRENCY`. A timeout names the phase that stalled, so raise `DPSK_INITIALIZE_TIMEOUT` or `DPSK_PROMPT_TIMEOUT` only when that extra time is expected
+Jobs take turns starting: one starts at a time by default, and they run concurrently once up. `DPSK_START_CONCURRENCY` changes how many may start at once; the smallest value among participating launchers applies, like `DPSK_CONCURRENCY`. A timeout names the phase that stalled, so raise `DPSK_INITIALIZE_TIMEOUT` or `DPSK_PROMPT_TIMEOUT` only when that extra time is expected. Waiting costs a job nothing: `--time-limit` is counted from the moment the job starts, not from when it was queued, and `dsb status` reports both `startedAt` (queued) and `runningAt` (started)
 
 ## License
 

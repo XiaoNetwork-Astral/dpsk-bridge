@@ -110,7 +110,7 @@ dsv update             # 检查并安装更新
 | `DPSK_CONTEXT_LIMIT`       | 上下文提醒阈值（token）                            | `200000`            |
 | `DSH_HOME`                 | `dsh` 主目录（作业存于 `$DSH_HOME/bridge`）        | `~/.dsh`            |
 
-作业会轮流启动：默认一次只启动一个，启动完成后仍可并发运行。`DPSK_START_CONCURRENCY` 可调整同时启动的数量；多个启动器共用时取最小值，规则与 `DPSK_CONCURRENCY` 相同。超时信息会指明卡住的阶段，只有确实需要更长等待时才调高 `DPSK_INITIALIZE_TIMEOUT` 或 `DPSK_PROMPT_TIMEOUT`
+作业会轮流启动：默认一次只启动一个，启动完成后仍可并发运行。`DPSK_START_CONCURRENCY` 可调整同时启动的数量；多个启动器共用时取最小值，规则与 `DPSK_CONCURRENCY` 相同。超时信息会指明卡住的阶段，只有确实需要更长等待时才调高 `DPSK_INITIALIZE_TIMEOUT` 或 `DPSK_PROMPT_TIMEOUT`。排队不占用作业时限：`--time-limit` 从作业真正启动时开始计时，而非从排队时开始，`dsb status` 会同时给出 `startedAt`（排队时刻）和 `runningAt`（启动时刻）
 
 ## 许可证
 

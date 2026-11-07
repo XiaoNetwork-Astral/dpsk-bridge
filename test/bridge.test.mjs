@@ -1274,3 +1274,35 @@ test('briefText uses the caller label in its errors', (t) => {
   assert.throws(() => briefText(blank), /Brief must not be blank/);
   assert.throws(() => briefText(blank, 'Answer'), /Answer must not be blank/);
 });
+
+test('a job queued behind another keeps its whole time limit', async (t) => {
+  // One slot, so the second job waits for longer than its own limit. The limit
+  // runs from startup, so waiting must not consume any of it.
+  const holder = setup(t, '[hold] occupy the only slot');
+  const waiter = setup(t, 'simple');
+
+  let announceStart;
+  const holderRunning = new Promise((resolve) => {
+    announceStart = resolve;
+  });
+
+  const holderJob = runJob(
+    { ...holder.options, timeout: 3, maxConcurrent: 1 },
+    (event) => {
+      if (event.event === 'started') announceStart();
+    },
+    holder.home,
+  );
+  await holderRunning;
+
+  const waiterJob = await runJob(
+    { ...waiter.options, timeout: 2, maxConcurrent: 1 },
+    () => {},
+    holder.home,
+  );
+  await holderJob;
+
+  const waited = waiterJob.runningAt - waiterJob.startedAt;
+  assert.ok(waited > 2000, `expected a wait longer than the 2s limit, got ${waited}ms`);
+  assert.equal(waiterJob.processState, 'completed', waiterJob.error);
+});
