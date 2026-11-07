@@ -6,13 +6,16 @@ Read this when a call fails, a job makes no progress for a long time, or work ne
 |---|---|
 | The job waits for an answer to a question or permission request | Read `pendingRequests` from `dsb status <ID>` and `dsb events <ID>`, then answer with `dsb answer`. Approve what the user's existing authorization covers; when it does not settle the request, ask the user. Keep the sandbox enabled throughout. |
 | `send` / `answer` returned `queued` but nothing changes | Queued means waiting for delivery. Keep the returned input ID and page through events for the matching `input_delivered` / `input_rejected`, and look for `request_cancelled` when the request itself may have been withdrawn. Follow-ups enter the next turn without interrupting the current step. |
-| The job stays `queued` | Check the concurrency limit (see "Calling and waiting" in SKILL.md), scope conflicts in the same workspace, and holders of the same `--resource`. Keep the declared read-only flag and write scope accurate; they are what the queue relies on. Cancellation and timeouts include the queued time. |
+| The job stays `queued` | Check the concurrency limit (see "Calling and waiting" in SKILL.md), scope conflicts in the same workspace, and holders of the same `--resource`. Jobs also take turns starting, one at a time by default, so a job may wait for an earlier one to come up; adjust with `DPSK_START_CONCURRENCY` (1..64). Keep the declared read-only flag and write scope accurate; they are what the queue relies on. Cancellation and timeouts include the queued time. |
+| The workspace is not a Git repository | Nothing to fix: jobs run normally. `dsb status <ID>` shows `workspaceKind` `directory`, and the pre/post `git status` inventory is marked unavailable. Do not create a repository in the user's workspace. |
+| A command refuses the job as another session's | The job belongs to the session that started it. Read it with `status`, `result`, `events`, and `wait`; if that owner is gone, check the job's state and take it over with `dsb adopt <ID>`. Use `dsb adopt <ID> --user-ok` only when the owner is still running and the user has decided. |
+| `dsh did not finish starting within ...` or `session was not created within ...` | The message names the phase that stalled. Confirm the MCP patches are needed, then raise `DPSK_INITIALIZE_TIMEOUT` (default 120000 ms, plus 60000 per `--patch`) or `DPSK_PROMPT_TIMEOUT` (default 90000 ms) only when the extra time is expected. |
 | Unsupported Node.js, dsh, or job version | Update to Node.js >=24.9, `@deepseek-ai/dsh` >=0.2.2-alpha.3, and the current bridge. Only the current SDK and job format are supported, and v4 is the verified session log format (newer versions are read but marked as not yet verified); use the current launcher for every job. |
 | `detected dubious ownership` | After confirming this is the authorized project, use `git -c safe.directory='<project path>' ...` for that Git command, leaving the global trust configuration as it is. |
 | `cannot modify ...: file has not been read` | Read the existing file before overwriting it, and check whether another process changed it. |
 | Windows: `ReplaceFileW EIO (Win32 1175)` or other file-lock IO errors | Check the file's current content and who holds it. Once the failure is confirmed to be temporary, retry the affected step and verify what was actually written; the rest of the task stands as it is. |
 | `cannot read ...: not found` | Check the path and the working directory. A moved file may be located within the authorized scope; if the right target cannot be confirmed, report it as blocked. |
-| exit 126 `path longer than allowed` | Check the length of the working directory. Use an existing short path into the same authorized project, or let the host agent handle it; the repository stays where it is, and the job runs in its own project. |
+| exit 126 `path longer than allowed` | Check the length of the working directory. Use an existing short path into the same authorized project, or let the host agent handle it; the project stays where it is, and the job runs in its own project. |
 | The job fails right away with ENOENT for the brief | The brief file was not on disk yet when `dsb run` started. Confirm the file exists, then start again; no job was created, so this is not a rework. |
 | `invalid config` / MCP fails to start | Use the `deepseek-mcp` skill to check the loaded patch, its dependencies, and required environment variables. Keep credentials out of diagnostic output. |
 
@@ -28,7 +31,7 @@ While a job is still running, check its current progress first, then follow "Two
 
 ## Resuming from partial results
 
-Confirm the old job ended, compare the existing changes with the pre-dispatch baseline, and keep the verified results. The new brief restates the original goal, limits, and acceptance criteria as needed, and adds:
+Confirm the old job ended, compare the existing changes with the pre-dispatch state, and keep the verified results. The new brief restates the original goal, limits, and acceptance criteria as needed, and adds:
 
 ```text
 [Resume] The previous job has ended. Reason: <actual exit/cancel/failure reason>.
@@ -41,7 +44,7 @@ When an operation on an external application timed out and its outcome is unclea
 
 ## dsb is not on PATH
 
-First check whether PATH just has not been refreshed. Any host can call the same bridge with `node "<dpsk-bridge repo>/bin/dsb.mjs" ...`. Make sure dependencies are installed and use the current `run` / `send` / `answer` / `events`. If you cannot control the process lifecycle, restore the host's ability to run commands first, so the handle stays managed and waiting stays bounded.
+First check whether PATH just has not been refreshed. Any host can call the same bridge with `node "<dpsk-bridge directory>/bin/dsb.mjs" ...`. Make sure dependencies are installed and use the current `run` / `send` / `answer` / `events`. If you cannot control the process lifecycle, restore the host's ability to run commands first, so the handle stays managed and waiting stays bounded.
 
 ## Viewer and updates
 

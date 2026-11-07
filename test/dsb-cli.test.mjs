@@ -122,7 +122,10 @@ const CASES = [
     args: [ID, '--confirm-stopped'],
     expected: { confirmStopped: true },
   },
+  { name: 'adopt', id: ID, args: [ID], expected: {} },
+  { name: 'adopt', id: ID, args: [ID, '--user-ok'], expected: { userOk: true } },
   { name: 'stats', id: null, args: [], expected: {} },
+  { name: 'stats', id: null, args: ['--all'], expected: { all: true } },
 ];
 
 test('every command parses legal arguments into the documented internal keys', () => {
@@ -219,6 +222,13 @@ test('every documented short alias maps to its long option', () => {
     {
       command: 'retry',
       prefix: [ID, '-f', 'feedback.md'],
+      alias: '-u',
+      key: 'userOk',
+      expected: true,
+    },
+    {
+      command: 'adopt',
+      prefix: [ID],
       alias: '-u',
       key: 'userOk',
       expected: true,
@@ -443,6 +453,7 @@ test('ID-taking commands reject a missing ID at parse time', () => {
     retry: ['--feedback', 'feedback.md'],
     review: ['--verdict', 'accepted', '--note', 'evidence'],
     unlock: ['--confirm-stopped'],
+    adopt: [],
   };
 
   for (const [name, args] of Object.entries(cases))
@@ -581,6 +592,30 @@ test('guard-rail flags parse and appear in help', () => {
   assert.match(flat(commandHelp('retry')), /--user-ok.*one-rework task cap/);
   assert.match(flat(commandHelp('run')), /--context-limit <TOKENS>.*DPSK_CONTEXT_LIMIT/);
   assert.match(flat(rootHelp()), /DPSK_CONTEXT_LIMIT Default context reminder threshold/);
+});
+
+test('adopt and stats parse their flags and appear in help output', () => {
+  assert.deepEqual(parseCommand('adopt', [ID]), {
+    action: 'command',
+    command: 'adopt',
+    options: emptyLists(),
+    positionals: { id: ID },
+  });
+  assert.deepEqual(parseCommand('adopt', [ID, '--user-ok']).options, {
+    ...emptyLists(),
+    userOk: true,
+  });
+  assert.deepEqual(parseCommand('stats', ['--all']).options, { ...emptyLists(), all: true });
+
+  assert.match(commandHelp('adopt'), /Usage: dsb adopt <ID> \[--user-ok\]/);
+  assert.match(commandHelp('adopt'), /-u, --user-ok/);
+  assert.match(commandHelp('adopt'), /Take over a job started by another session/);
+  assert.match(commandHelp('stats'), /Usage: dsb stats \[--all\]/);
+  assert.match(commandHelp('stats'), /--all/);
+  assert.match(commandHelp('stats'), /Count jobs from every session sharing this DSH_HOME/);
+
+  assert.match(rootHelp(), /^  adopt\s+Take over a job/m);
+  assert.match(rootHelp(), /^  stats\s+Summarize local jobs/m);
 });
 
 test('long descriptions wrap to 100 columns by default and remain aligned', () => {

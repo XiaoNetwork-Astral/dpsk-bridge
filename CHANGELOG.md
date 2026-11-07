@@ -3,6 +3,21 @@
 All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- Jobs belong to the host session that started them. Commands that change a job (`cancel`, `unlock`, `send`, `answer`, `retry`, `review`) refuse a job another session started, while `status`, `result`, `events`, and `wait` still read it, so an abandoned job can be inspected before it is taken over. `dsb adopt <ID>` takes over a job whose owner is gone, and `dsb adopt <ID> --user-ok` one whose owner is still running. `dsb stats` now counts only this session's jobs, with `dsb stats --all` for every session's. Jobs recorded before this have no owner and stay operable by any session.
+- The owner is derived from the process tree: dsb walks up past shells and past the Node processes that only run dsb itself or a package manager, so a host that is a Node program, such as Codex, is recognized by the script it runs rather than mistaken for a wrapper. A host that can expose its own session id can set `DPSK_OWNER` instead, which is exact and skips reading the process table. Like `--scope`, this is cooperative rather than a sandbox.
+- `dsv` marks the owner of each session with a stable two-character badge, dimmed and marked `×` when that session is gone, and `o` filters the list to one owner. The viewer still shows every session, because it is the human's view.
+- `dsb status` reports `workspace` and `workspaceKind` (`git` or `directory`), so an agent can check how the workspace root was decided instead of guessing.
+
+### Fixed
+
+- Concurrent jobs no longer time out together on startup. dsh has no startup lock of its own and repeats its whole cold start in every process, so simultaneous starts multiplied the same disk, CPU, and network work until they all exceeded the request budget. Jobs now take turns starting — one at a time by default, `DPSK_START_CONCURRENCY` (1..64) to raise it — and still run concurrently once up.
+- The SDK request budgets were a hardcoded 30 seconds, which is shorter than a cold dsh start, especially with MCP patches. They are now `DPSK_INITIALIZE_TIMEOUT` (default 120000 ms, plus 60000 per `--patch`, matching the MCP handshake default) and `DPSK_PROMPT_TIMEOUT` (default 90000 ms), and a timeout now names the phase that stalled instead of only the request. The budget also covers delivery of queued follow-up messages, which used the same hardcoded value.
+- Documentation no longer reads as though a Git repository were required. Neither dsb nor dsh needs one: jobs start, edit files, and run commands normally in a plain directory. Git decides only the workspace root — the repository root when there is one, the working directory otherwise — and whether the `git status` inventory around a run can be recorded. The skill now says outright that an agent must not run `git init` in a user's workspace in order to run a job.
+
 ## [0.5.1] - 2026-11-05
 
 ### Fixed

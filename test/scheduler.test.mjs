@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { acquireSlot, releaseReservation } from '../lib/scheduler.mjs';
+import { acquireSlot, acquireStartGate, releaseReservation } from '../lib/scheduler.mjs';
 import { liveProcessState } from '../lib/job-state.mjs';
 
 // Helpers
@@ -69,6 +69,21 @@ if (process.argv[2] === '--scheduler-worker') {
       if (error.code === 'ENOENT') return { reservations: [] };
       throw error;
     }
+  }
+
+  function gateState(f) {
+    return state(f).startGate ?? { holders: [], released: [] };
+  }
+
+  function gateOptions(f, id, extra = {}) {
+    return { home: f.home, id, ...extra };
+  }
+
+  function updateGate(f, mutate) {
+    const file = path.join(f.home, 'scheduler', 'state.json');
+    const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+    mutate(record.startGate);
+    fs.writeFileSync(file, JSON.stringify(record) + '\n');
   }
 
   async function until(check, message = 'condition', timeout = 10000) {
@@ -315,6 +330,206 @@ if (process.argv[2] === '--scheduler-worker') {
     const third = await thirdPending;
     await third.release();
     assert.deepEqual(order, [2, 3]);
+  });
+
+  // Start gate
+  test('start gate with limit 1 admits one launcher until release', async (t) => {
+    const f = fixture(t),
+      first = await acquireStartGate(gateOptions(f, 'first'));
+    let second = null;
+    const waiting = acquireStartGate(gateOptions(f, 'second')).then((held) => {
+      second = held;
+      return held;
+    });
+
+    await delay(120);
+    assert.equal(second, null);
+    assert.deepEqual(
+      gateState(f).holders.map((holder) => holder.id),
+      ['first'],
+    );
+
+    await first.release();
+    const next = await waiting;
+    assert.deepEqual(
+      gateState(f).holders.map((holder) => holder.id),
+      ['second'],
+    );
+    await next.release();
+    assert.deepEqual(gateState(f).holders, []);
+  });
+
+  test('start gate with limit 2 admits two launchers and holds the third', async (t) => {
+    const f = fixture(t),
+      first = await acquireStartGate(gateOptions(f, 'first', { limit: 2 })),
+      second = await acquireStartGate(gateOptions(f, 'second', { limit: 2 }));
+    let third = null;
+    const waiting = acquireStartGate(gateOptions(f, 'third', { limit: 2 })).then((held) => {
+      third = held;
+      return held;
+    });
+
+    await delay(120);
+    assert.equal(third, null);
+    assert.equal(gateState(f).holders.length, 2);
+
+    await first.release();
+    const next = await waiting;
+    assert.deepEqual(
+      gateState(f)
+        .holders.map((holder) => holder.id)
+        .sort(),
+      ['second', 'third'],
+    );
+    await Promise.all([second.release(), next.release()]);
+    assert.deepEqual(gateState(f).holders, []);
+  });
+
+  test('the smallest start gate limit among holders and the new request applies', async (t) => {
+    const f = fixture(t),
+      first = await acquireStartGate(gateOptions(f, 'first', { limit: 2 }));
+    let second = null;
+    const waiting = acquireStartGate(gateOptions(f, 'second', { limit: 1 })).then((held) => {
+      second = held;
+      return held;
+    });
+
+    await delay(120);
+    assert.equal(second, null);
+
+    await first.release();
+    const next = await waiting;
+    assert.deepEqual(
+      gateState(f).holders.map((holder) => holder.id),
+      ['second'],
+    );
+    await next.release();
+  });
+
+  test('start gate release is idempotent', async (t) => {
+    const f = fixture(t),
+      held = await acquireStartGate(gateOptions(f, 'held'));
+
+    await held.release();
+    await held.release();
+    assert.deepEqual(gateState(f).holders, []);
+
+    const again = await acquireStartGate(gateOptions(f, 'again'));
+    await again.release();
+    assert.deepEqual(gateState(f).holders, []);
+  });
+
+  test('start gate cancellation and timeout use the scheduler error shapes', async (t) => {
+    const f = fixture(t),
+      held = await acquireStartGate(gateOptions(f, 'held'));
+
+    const controller = new AbortController();
+    const pending = acquireStartGate(gateOptions(f, 'cancel', { signal: controller.signal }));
+    const rejected = assert.rejects(pending, { name: 'AbortError', code: 'ABORT_ERR' });
+    await delay(30);
+    controller.abort();
+    await rejected;
+
+    await assert.rejects(acquireStartGate(gateOptions(f, 'timeout', { timeoutMs: 70 })), {
+      name: 'TimeoutError',
+      code: 'QUEUE_TIMEOUT',
+    });
+    await assert.rejects(
+      acquireStartGate(gateOptions(f, 'preabort', { signal: AbortSignal.abort() })),
+      { name: 'AbortError', code: 'ABORT_ERR' },
+    );
+
+    await held.release();
+    assert.deepEqual(gateState(f).holders, []);
+  });
+
+  test('a dead start gate holder with a stale heartbeat is released by a waiter', async (t) => {
+    const f = fixture(t),
+      heartbeatFile = path.join(f.root, 'gate-heartbeat');
+    fs.writeFileSync(heartbeatFile, '');
+    await acquireStartGate(gateOptions(f, 'crashed', { heartbeatFile }));
+    const gone = await deadPid();
+    updateGate(f, (gate) => {
+      gate.holders[0].supervisorPid = gone;
+    });
+    stale(heartbeatFile);
+
+    const next = await acquireStartGate(gateOptions(f, 'next'));
+    assert.deepEqual(
+      gateState(f).holders.map((holder) => holder.id),
+      ['next'],
+    );
+
+    const release = gateState(f).released.find((item) => item.id === 'crashed');
+    assert.ok(release);
+    assert.match(release.reason, /heartbeat stale/);
+    await next.release();
+  });
+
+  test('a start gate holder older than staleAfterMs is force-released and recorded', async (t) => {
+    const f = fixture(t),
+      dir = path.join(f.home, 'jobs', 'aged'),
+      eventsFile = path.join(dir, 'events.jsonl');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(eventsFile, '');
+    const held = await acquireStartGate(gateOptions(f, 'aged'));
+    updateGate(f, (gate) => {
+      gate.holders[0].startedAt = Date.now() - 1000;
+    });
+
+    const next = await acquireStartGate(gateOptions(f, 'next', { staleAfterMs: 500 }));
+    assert.deepEqual(
+      gateState(f).holders.map((holder) => holder.id),
+      ['next'],
+    );
+
+    const release = gateState(f).released.find((item) => item.id === 'aged');
+    assert.ok(release);
+    assert.match(release.reason, /staleAfterMs/);
+    assert.ok(Number.isSafeInteger(release.time));
+
+    const events = fs
+      .readFileSync(eventsFile, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].event, 'start_gate_released');
+    assert.match(events[0].reason, /staleAfterMs/);
+
+    await held.release();
+    assert.deepEqual(
+      gateState(f).holders.map((holder) => holder.id),
+      ['next'],
+    );
+    await next.release();
+  });
+
+  test('the start gate and scheduler reservations stay independent', async (t) => {
+    const f = fixture(t),
+      slot = await acquireSlot(options(f, 'job', { scopes: ['a'] })),
+      first = await acquireStartGate(gateOptions(f, 'job'));
+
+    assert.equal(state(f).reservations.length, 1);
+    assert.equal(gateState(f).holders.length, 1);
+
+    await first.release();
+    assert.equal(state(f).reservations.length, 1);
+    assert.deepEqual(gateState(f).holders, []);
+
+    const second = await acquireStartGate(gateOptions(f, 'job'));
+    await slot.release();
+    assert.deepEqual(state(f).reservations, []);
+    assert.equal(gateState(f).holders.length, 1);
+
+    await second.release();
+    assert.deepEqual(gateState(f).holders, []);
+  });
+
+  test('the start gate rejects invalid limits', async (t) => {
+    const f = fixture(t);
+    for (const limit of [0, 65, 1.5, NaN, Infinity, '2', null])
+      await assert.rejects(acquireStartGate(gateOptions(f, 'bad', { limit })), /limit/);
   });
 
   // Recovery and liveness

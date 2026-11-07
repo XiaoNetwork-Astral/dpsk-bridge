@@ -6,7 +6,7 @@ import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { flushInput, parseInput, runSnapshot } from '../lib/viewer/app.mjs';
+import { flushInput, parseInput, runSnapshot, toggleOwnerFilter } from '../lib/viewer/app.mjs';
 import { show, watch } from '../lib/viewer/cli.mjs';
 import { createSessionStore } from '../lib/viewer/store.mjs';
 import { createEventReader, listSessionFiles } from '../lib/sessions.mjs';
@@ -985,6 +985,67 @@ test('runSnapshot paints one frame and loads only the visible list titles', asyn
   assert.equal(frame.split('\n').slice(0, -1).length, 20);
   assert.match(frame, /ANSWER_s0/);
   assert.ok(loads.length < store.files.length, `loaded ${loads.length} of ${store.files.length}`);
+});
+
+test('o toggles the owner filter from the selected session and does nothing without an owner', () => {
+  const record = {
+    id: 'owner-1',
+    label: 'pwsh 1',
+    pid: process.pid,
+    startedAt: 1,
+    source: 'process',
+  };
+  const owned = { id: 's1', owner: record };
+  const plain = { id: 's2', owner: null };
+  const before = JSON.stringify(owned);
+
+  assert.equal(toggleOwnerFilter(null, owned), 'owner-1');
+  assert.equal(toggleOwnerFilter('owner-1', owned), null);
+  assert.equal(JSON.stringify(owned), before, 'toggling the filter leaves the selection alone');
+  assert.equal(toggleOwnerFilter(null, plain), null);
+  assert.equal(
+    toggleOwnerFilter('owner-1', plain),
+    'owner-1',
+    'pressing o on an unowned session leaves an active filter alone',
+  );
+  assert.equal(toggleOwnerFilter('owner-1', { id: 's3' }), 'owner-1');
+  assert.equal(toggleOwnerFilter(null, null), null);
+  assert.doesNotThrow(() => toggleOwnerFilter(null, undefined));
+});
+
+test('session records carry the bridge owner so the viewer can badge a row', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dsv-owner-'));
+  const bridgeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsv-owner-bridge-'));
+  t.after(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(bridgeDir, { recursive: true, force: true });
+  });
+
+  const at = new Date(2026, 0, 15, 12).getTime();
+  const id = '11111111-1111-4111-8111-111111111111';
+  writeSimpleSession(root, id, { title: 'OWNED_TASK', mtime: at });
+
+  const record = {
+    id: 'a1b2c3d4e5f60718',
+    label: 'pwsh 4321',
+    pid: process.pid,
+    startedAt: at,
+    source: 'process',
+  };
+  fs.mkdirSync(path.join(bridgeDir, 'jobs', id), { recursive: true });
+  fs.writeFileSync(
+    path.join(bridgeDir, 'jobs', id, 'job.json'),
+    JSON.stringify({ version: 2, id, owner: record }),
+  );
+
+  const store = createSessionStore({ root, bridgeDir, now: () => at });
+  try {
+    await store.init();
+    const found = store.sessions(at).find((session) => session.id === id);
+    assert.deepEqual(found.owner, record);
+  } finally {
+    store.dispose();
+  }
 });
 
 test('dsv --snapshot prints exactly one frame from a selected session', (t) => {

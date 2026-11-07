@@ -7,8 +7,11 @@ import {
   helpLines,
   helpView,
   listItems,
+  ownerColor,
+  ownerMark,
   statusInfo,
 } from '../lib/viewer/layout.mjs';
+import { ownerBadge } from '../lib/owner.mjs';
 import {
   buildBlocks,
   flattenBlocks,
@@ -47,6 +50,15 @@ const session = (id, overrides = {}) => ({
   ...overrides,
 });
 
+const owner = (id, overrides = {}) => ({
+  id,
+  label: 'pwsh 4321',
+  pid: process.pid,
+  startedAt: now - 60_000,
+  source: 'process',
+  ...overrides,
+});
+
 const detailFor = (lines) => ({
   lines,
   keys: lines.map(() => 'final'),
@@ -57,6 +69,8 @@ const detailFor = (lines) => ({
 
 const framePlain = (frame) =>
   frame.lines.map((line) => line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ''));
+
+const plainLine = (line) => line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
 
 /** Text painted in 1-based display columns x0..x1 of a plain line. */
 function columnsOf(line, x0, x1) {
@@ -214,6 +228,8 @@ test('help overlays the detail pane and keeps the complete key table available',
     'n next running session',
     'Ctrl+L redraw',
     'u check for and install updates',
+    '·7f owner badge',
+    'o filters to it',
     '? or Esc closes',
   ])
     assert.ok(text.includes(value), value);
@@ -521,6 +537,204 @@ test('footer Enter label follows the item under the cursor', () => {
   const onGroup = framePlain(renderFrame(model({ listCursor: 'group:done' }))).at(-1);
   assert.match(onGroup, /Enter +Fold/);
   assert.match(framePlain(renderFrame(model())).at(-1), /Enter +Open/);
+});
+
+test('a session row puts its owner badge between the project and the age', () => {
+  const record = owner('a1b2c3d4e5f60718');
+  const badge = `·${ownerBadge(record.id)}`;
+  const owned = session('owned', {
+    cwd: '/work/proj',
+    mtime: now - 11 * 60_000,
+    errors: 1,
+    owner: record,
+  });
+
+  const frame = renderFrame(
+    model({
+      columns: 200,
+      sessions: [owned],
+      selectedId: owned.id,
+      selected: owned,
+      listCursor: `session:${owned.id}`,
+      st: styler(true),
+    }),
+  );
+  const row = frame.lines.find((line) => line.includes('11 min ago'));
+  assert.ok(row, 'the session row is painted');
+
+  const text = plainLine(row);
+  assert.match(text, new RegExp(`proj ${badge} {2}11 min ago {2}!`));
+  assert.ok(text.indexOf('proj') < text.indexOf(badge), 'badge follows the project');
+  assert.ok(text.indexOf(badge) < text.indexOf('11 min ago'), 'age follows the badge');
+  assert.ok(row.includes(badge), 'the badge is not cut off');
+});
+
+test('a session without an owner keeps the old row exactly, including one gray run', () => {
+  const plain = session('plain', {
+    cwd: '/work/plain',
+    mtime: now - 11 * 60_000,
+    errors: 1,
+  });
+
+  const frame = renderFrame(
+    model({
+      sessions: [plain],
+      selectedId: plain.id,
+      selected: plain,
+      listCursor: `session:${plain.id}`,
+      st: styler(true),
+    }),
+  );
+  const row = frame.lines.find((line) => line.includes('11 min ago'));
+  assert.ok(row, 'the session row is painted');
+
+  const text = plainLine(row);
+  assert.doesNotMatch(text, /·/, 'no badge is added');
+  assert.match(text, /plain {2}11 min ago {2}!/);
+  assert.ok(
+    row.includes('\x1b[90mplain  11 min ago\x1b[0m'),
+    'project and age still share one gray run',
+  );
+});
+
+test('a departed owner badge is dimmed with a cross while an unknown presence stays plain', () => {
+  const cases = [
+    { record: owner('deadbeefdeadbeef', { pid: 0 }), present: false, mark: '×' },
+    { record: owner('cafebabecafebabe', { pid: null }), present: null, mark: '' },
+  ];
+
+  for (const { record, present, mark } of cases) {
+    const expected = ownerMark(record, present);
+    assert.equal(expected.text, `·${ownerBadge(record.id)}${mark}`);
+
+    const rowSession = session(`owner-${mark || 'plain'}`, {
+      cwd: '/work/owned',
+      mtime: now - 11 * 60_000,
+      owner: record,
+    });
+
+    const frame = renderFrame(
+      model({
+        sessions: [rowSession],
+        selectedId: rowSession.id,
+        selected: rowSession,
+        listCursor: `session:${rowSession.id}`,
+        st: styler(true),
+      }),
+    );
+    const row = frame.lines.find((line) => line.includes('11 min ago'));
+    assert.ok(row, 'the session row is painted');
+
+    const paint = styler(true)[expected.color];
+    const painted = paint(expected.text);
+    assert.ok(
+      row.includes(present === false ? styler(true).dim(painted) : painted),
+      present === false ? 'the departed badge is dimmed' : 'the unknown badge keeps full colour',
+    );
+    assert.equal(plainLine(row).includes('×'), present === false);
+  }
+});
+
+test('owner badges and colours are deterministic for the same owner id', () => {
+  const palette = ['cyan', 'green', 'yellow', 'blue', 'magenta'];
+
+  for (const id of ['a1b2c3d4e5f60718', 'ffffffffffffffff', 'owner-3']) {
+    const first = ownerMark(owner(id), true);
+    const second = ownerMark(owner(id), true);
+
+    assert.equal(first.text, second.text);
+    assert.equal(first.color, second.color);
+    assert.equal(ownerColor(id), ownerColor(id));
+    assert.match(first.text, /^·[0-9a-f]{2}$/);
+    assert.ok(palette.includes(first.color), first.color);
+  }
+});
+
+test('a narrow window shortens the project rather than the badge or the age', () => {
+  const record = owner('beefcafe12345678');
+  const badge = `·${ownerBadge(record.id)}`;
+  const rowSession = session('narrow', {
+    cwd: `/work/${'very-long-project-'.repeat(20)}`,
+    mtime: now - 11 * 60_000,
+    owner: record,
+  });
+
+  const frame = renderFrame(
+    model({
+      columns: 60,
+      rows: 20,
+      sessions: [rowSession],
+      selectedId: rowSession.id,
+      selected: rowSession,
+      listCursor: `session:${rowSession.id}`,
+    }),
+  );
+  const row = framePlain(frame).find((line) => line.includes('11 min ago'));
+  assert.ok(row, 'the truncated project is still painted');
+
+  assert.ok(row.includes('…'), 'the project was shortened');
+  assert.ok(row.includes(badge), 'the badge survived');
+  assert.ok(row.includes('11 min ago'), 'the age survived');
+  assert.ok(row.indexOf(badge) < row.indexOf('11 min ago'));
+});
+
+test('the list can filter to one owner and the Sessions title says which', () => {
+  const a = session('a', { title: '任务a', owner: owner('owner-a') });
+  const b = session('b', { title: '任务b', owner: owner('owner-b') });
+  const c = session('c', { title: '任务c', owner: owner('owner-a') });
+  const base = {
+    sessions: [a, b, c],
+    selectedId: 'a',
+    selected: a,
+    listCursor: 'session:a',
+  };
+
+  const all = framePlain(renderFrame(model(base))).join('\n');
+  for (const title of ['任务a', '任务b', '任务c']) assert.ok(all.includes(title), title);
+
+  const filtered = renderFrame(model({ ...base, ownerFilter: 'owner-a' }));
+  const text = framePlain(filtered).join('\n');
+
+  assert.ok(text.includes('任务a'));
+  assert.ok(text.includes('任务c'));
+  assert.ok(!text.includes('任务b'), 'the other owner is hidden');
+
+  const titleLine = framePlain(filtered)[1];
+  assert.match(titleLine, new RegExp(`╭ Sessions  owner ·${ownerBadge('owner-a')}`));
+  assert.match(titleLine, /任务a/, 'the selected session is still shown in the detail title');
+
+  const items = listItems({ sessions: base.sessions, ownerFilter: 'owner-a', now });
+  assert.deepEqual(
+    items.items.filter((item) => item.type === 'session').map((item) => item.session.id),
+    ['a', 'c'],
+  );
+});
+
+test('the footer shows the o owner toggle and highlights it while filtering', () => {
+  const off = renderFrame(model({ st: styler(true) })).lines.at(-1);
+  const on = renderFrame(model({ st: styler(true), ownerFilter: 'a1b2c3d4' })).lines.at(-1);
+
+  assert.match(plainLine(off), / o +Owner/);
+  assert.ok(off.includes('\x1b[1;97;48;5;238m o \x1b[0m'), 'the idle chip uses the key style');
+  assert.ok(on.includes('\x1b[1;30;42m o \x1b[0m'), 'the active chip uses the on style');
+  assert.ok(!off.includes('\x1b[1;30;42m o \x1b[0m'));
+});
+
+test('the info panel names the owner, its presence and a non-process source', () => {
+  const record = owner('abcdef0123456789', { label: 'pwsh 4321', source: 'shell' });
+  const rowSession = session('info', { owner: record });
+
+  const frame = renderFrame(
+    model({
+      sessions: [rowSession],
+      selectedId: rowSession.id,
+      selected: rowSession,
+      info: true,
+    }),
+  );
+  const text = framePlain(frame).join('\n');
+
+  assert.match(text, /Owner +·[0-9a-f]{2} {2}pwsh 4321 {3}present {3}source shell/);
 });
 
 test('the list never starts in the middle of a two-line session', () => {

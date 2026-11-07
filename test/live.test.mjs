@@ -6,7 +6,15 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
-import { runSdk, queueInput, eventsPage } from '../lib/live.mjs';
+import {
+  runSdk,
+  queueInput,
+  eventsPage,
+  sdkTimeouts,
+  SDK_INITIALIZE_TIMEOUT_MS,
+  SDK_PROMPT_TIMEOUT_MS,
+  SDK_MCP_HANDSHAKE_TIMEOUT_MS,
+} from '../lib/live.mjs';
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -22,10 +30,13 @@ async function until(check) {
 
 // Fake SDK child
 class FakeChild extends EventEmitter {
-  constructor() {
+  constructor(stall = []) {
     super();
     this.stdout = new PassThrough();
     this.received = [];
+
+    // A stalled method is read but never answered, so a test can observe its timeout.
+    this.stall = new Set(stall);
 
     // Only an unanswered session/wait can finish the job. Clearing the flag on
     // finish prevents a later test step from answering a stale id.
@@ -46,6 +57,7 @@ class FakeChild extends EventEmitter {
   }
 
   receive(message) {
+    if (this.stall.has(message.method)) return;
     if (message.method === 'initialize') {
       this.initialize = message.params;
       this.send({
@@ -113,7 +125,10 @@ class FakeChild extends EventEmitter {
 }
 
 // Fixtures
-function fixture(t, emit = () => {}, signal = null) {
+function fixture(
+  t,
+  { emit = () => {}, signal = null, job: fields = {}, stall = [], onReady = null } = {},
+) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'live-fixture-'));
   const home = path.join(root, 'home'),
     id = randomUUID(),
@@ -129,12 +144,13 @@ function fixture(t, emit = () => {}, signal = null) {
     model: 'fake',
     processState: 'running',
     reportFile: path.join(dir, 'report.txt'),
+    ...fields,
   };
 
   const save = () => fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
   save();
 
-  const child = new FakeChild(),
+  const child = new FakeChild(stall),
     controller = new AbortController();
 
   const task = runSdk(child, {
@@ -144,6 +160,7 @@ function fixture(t, emit = () => {}, signal = null) {
     save,
     emit,
     signal: signal || controller.signal,
+    onReady,
   });
   task.catch(() => {});
 
@@ -354,7 +371,7 @@ test('an unsupported host request is rejected without becoming pending', async (
 test('an already aborted signal rejects the session instead of running it', async (t) => {
   const controller = new AbortController();
   controller.abort(new Error('Already cancelled'));
-  const f = fixture(t, () => {}, controller.signal);
+  const f = fixture(t, { signal: controller.signal });
   await assert.rejects(f.task, /Already cancelled/);
   assert.equal(fs.existsSync(f.job.reportFile), false);
   assert.equal(f.child.waiting, null);
@@ -392,4 +409,117 @@ test('eventsPage keeps more true while complete records remain past the limit', 
   const rest = eventsPage(job, page.cursor, 2);
   assert.deepEqual(rest.events, [{ event: 'third' }]);
   assert.equal(rest.more, false);
+});
+
+test('sdkTimeouts returns the documented defaults when a job states no timeouts', () => {
+  assert.equal(SDK_INITIALIZE_TIMEOUT_MS, 120000);
+  assert.equal(SDK_PROMPT_TIMEOUT_MS, 90000);
+  assert.deepEqual(sdkTimeouts({ id: 'job' }), {
+    initializeMs: SDK_INITIALIZE_TIMEOUT_MS,
+    promptMs: SDK_PROMPT_TIMEOUT_MS,
+  });
+});
+
+test('sdkTimeouts adds one MCP handshake per patch only to the initialize default', () => {
+  assert.equal(SDK_MCP_HANDSHAKE_TIMEOUT_MS, 60000);
+  assert.deepEqual(sdkTimeouts({ id: 'job', patches: ['a.json', 'b.json'] }), {
+    initializeMs: SDK_INITIALIZE_TIMEOUT_MS + 2 * SDK_MCP_HANDSHAKE_TIMEOUT_MS,
+    promptMs: SDK_PROMPT_TIMEOUT_MS,
+  });
+});
+
+test('sdkTimeouts keeps an explicit initialize timeout even when patches exist', () => {
+  assert.deepEqual(
+    sdkTimeouts({ initializeTimeoutMs: 45000, promptTimeoutMs: 10000, patches: ['a.json'] }),
+    { initializeMs: 45000, promptMs: 10000 },
+  );
+});
+
+test('sdkTimeouts rejects a stated timeout unless it is a positive safe integer', () => {
+  const invalid = [
+    ['initializeTimeoutMs', 0],
+    ['initializeTimeoutMs', -1],
+    ['initializeTimeoutMs', 1.5],
+    ['initializeTimeoutMs', '30000'],
+    ['promptTimeoutMs', 0],
+    ['promptTimeoutMs', -60000],
+    ['promptTimeoutMs', 2.5],
+    ['promptTimeoutMs', '90000'],
+  ];
+
+  for (const [field, value] of invalid)
+    assert.throws(
+      () => sdkTimeouts({ [field]: value }),
+      new RegExp(field),
+      `${field} accepted ${JSON.stringify(value)}`,
+    );
+});
+
+test('an initialize timeout reports that dsh did not finish starting', async (t) => {
+  const f = fixture(t, { job: { initializeTimeoutMs: 50 }, stall: ['initialize'] });
+  await assert.rejects(f.task, /dsh did not finish starting within 50 ms/);
+});
+
+test('a session/prompt timeout reports that the session was not created', async (t) => {
+  const f = fixture(t, { job: { promptTimeoutMs: 50 }, stall: ['session/prompt'] });
+  await assert.rejects(f.task, /session was not created within 50 ms/);
+});
+
+test('a queued message timeout keeps the transport wording and rejects the input', async (t) => {
+  // The budget also covers the acknowledged first prompt, so keep it generous.
+  const f = fixture(t, { job: { promptTimeoutMs: 200 } });
+  await until(() => f.child.waiting);
+
+  // The initial prompt was acknowledged; stall only the queued follow-up.
+  f.child.stall.add('session/prompt');
+  const inputId = queueInput(f.job, 'message', { text: 'more' }, f.home).inputId;
+
+  const rejected = await until(() =>
+    events(f).find((event) => event.event === 'input_rejected' && event.inputId === inputId),
+  );
+  assert.match(rejected.error, /SDK session\/prompt timed out/);
+
+  await settle(f);
+});
+
+test('onReady is called once after initialize succeeds and before the prompt', async (t) => {
+  const calls = [];
+  const f = fixture(t, {
+    onReady: () => {
+      calls.push({
+        initialized: Boolean(f.child.initialize),
+        prompted: Boolean(f.child.sessionId),
+      });
+    },
+  });
+
+  await until(() => f.child.waiting);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0], { initialized: true, prompted: false });
+
+  await settle(f);
+  assert.equal(calls.length, 1);
+});
+
+test('onReady is not called when initialize fails', async (t) => {
+  const calls = [];
+  const f = fixture(t, {
+    job: { initializeTimeoutMs: 50 },
+    stall: ['initialize'],
+    onReady: () => calls.push('ready'),
+  });
+
+  await assert.rejects(f.task, /dsh did not finish starting within 50 ms/);
+  assert.deepEqual(calls, []);
+});
+
+test('a throwing onReady does not fail the run', async (t) => {
+  const f = fixture(t, {
+    onReady: () => {
+      throw new Error('startup gate failed');
+    },
+  });
+
+  await settle(f);
+  assert.match(fs.readFileSync(f.job.reportFile, 'utf8'), /RESULT: OK/);
 });

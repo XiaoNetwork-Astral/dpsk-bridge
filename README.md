@@ -8,7 +8,7 @@ English | [中文](README.zh.md)
 
 Upstream `dsh` is still a developer preview, and versions may introduce breaking changes; see the [changelog](CHANGELOG.md)
 
-This project requires **Node.js 24.9+**, **npm**, and **Git**, and reads v4 session logs only
+The installer requires **Node.js 24.9+**, **npm**, and **Git**. Running a job does not require a Git repository: Git only sets the workspace root (the repository root when there is one, otherwise the working directory) and whether `dsb run` can record its `git status` inventory for review. This project reads v4 session logs only
 
 ## Install
 
@@ -71,7 +71,11 @@ dsb wait <ID> --timeout 600                    # block until local state changes
 dsb answer <ID> --request <REQ_ID> --answer answer.json  # answer a question or permission request
 dsb result <ID>                                # read the final report
 dsb review <ID> --verdict accepted --note "npm test passes" # record the acceptance result
+dsb stats [--all]                              # summarize this session's jobs (--all: every session's)
+dsb adopt <ID> [--user-ok]                     # take over a job another session started
 ```
+
+Each job belongs to the host session that started it, because every workspace shares one `DSH_HOME`. Commands that change a job (`cancel`, `unlock`, `send`, `answer`, `retry`, `review`) refuse a job another session started; `status`, `result`, `events`, and `wait` still read it. If the owner is gone, inspect the job and run `dsb adopt <ID>`; `dsb adopt <ID> --user-ok` is only for a job whose owner is still running, after the user has decided. Adopting changes the owner, not the job's state, so check the state first. The owner is derived from the process tree, or set explicitly with `DPSK_OWNER`; like `--scope`, this is cooperative, not a sandbox, and anything that can read `DSH_HOME` can still reach every job record
 
 For every option, the JSON formats, and short aliases, see `dsb <command> --help`
 
@@ -88,17 +92,25 @@ dsv update             # check for and install updates
 
 Press `?` in the viewer for the key bindings (common ones: `d` switches between the short and full view, `u` installs an update, `q` quits)
 
+`dsv` shows every session, because it is the human's view, and marks each session's owner; press `o` to filter the list to one owner
+
 ### Common environment variables
 
 Command-line options take precedence over environment variables, and `dsb retry` reuses the original job's settings by default:
 
-| Variable             | Description                                       | Default             |
-| -------------------- | ------------------------------------------------- | ------------------- |
-| `DPSK_PROVIDER`      | Model provider route                              | `deepseek-official` |
-| `DPSK_MODEL`         | Model name                                        | `deepseek-flash`    |
-| `DPSK_CONCURRENCY`   | Shared concurrent job limit (1–256)               | `8`                 |
-| `DPSK_CONTEXT_LIMIT` | Context reminder threshold (tokens)               | `200000`            |
-| `DSH_HOME`           | `dsh` home directory (jobs in `$DSH_HOME/bridge`) | `~/.dsh`            |
+| Variable                   | Description                                         | Default             |
+| -------------------------- | --------------------------------------------------- | ------------------- |
+| `DPSK_PROVIDER`            | Model provider route                                | `deepseek-official` |
+| `DPSK_MODEL`               | Model name                                          | `deepseek-flash`    |
+| `DPSK_CONCURRENCY`         | Shared concurrent job limit (1–256)                 | `8`                 |
+| `DPSK_START_CONCURRENCY`   | Jobs that may start at once (1–64); smallest wins   | `1`                 |
+| `DPSK_INITIALIZE_TIMEOUT`  | dsh startup budget (ms), plus 60000 per `--patch`   | `120000`            |
+| `DPSK_PROMPT_TIMEOUT`      | Session creation budget (ms)                        | `90000`             |
+| `DPSK_OWNER`               | Explicit host session id instead of process lookup  | derived             |
+| `DPSK_CONTEXT_LIMIT`       | Context reminder threshold (tokens)                 | `200000`            |
+| `DSH_HOME`                 | `dsh` home directory (jobs in `$DSH_HOME/bridge`)   | `~/.dsh`            |
+
+Jobs take turns starting: one starts at a time by default, and they run concurrently once up. `DPSK_START_CONCURRENCY` changes how many may start at once; the smallest value among participating launchers applies, like `DPSK_CONCURRENCY`. A timeout names the phase that stalled, so raise `DPSK_INITIALIZE_TIMEOUT` or `DPSK_PROMPT_TIMEOUT` only when that extra time is expected
 
 ## License
 

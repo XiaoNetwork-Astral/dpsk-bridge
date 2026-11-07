@@ -10,6 +10,7 @@ import {
   reviewJob,
   cancelJob,
   unlockJob,
+  adoptJob,
   stats,
   briefText,
   sendMessage,
@@ -45,7 +46,7 @@ try {
       emit({ event: 'finished', ...result(job) });
       process.exitCode = job.processState === 'completed' && job.reportedResult === 'OK' ? 0 : 1;
     } else if (command === 'stats') {
-      emit(stats());
+      emit(stats(undefined, { all: !!options.all }));
     } else {
       const job = readJob(positionals.id);
       if (command === 'status') emit(status(job));
@@ -53,6 +54,7 @@ try {
       else if (command === 'result') emit(result(job));
       else if (command === 'cancel') emit(cancelJob(job));
       else if (command === 'unlock') emit(await unlockJob(job, options.confirmStopped));
+      else if (command === 'adopt') emit(adoptJob(job, { userOk: !!options.userOk }));
       else if (command === 'send') emit(sendMessage(job, briefText(options.message, 'Message')));
       else if (command === 'answer')
         emit(

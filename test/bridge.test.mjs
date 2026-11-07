@@ -22,7 +22,9 @@ import {
   briefText,
   waitJob,
   unlockJob,
+  adoptJob,
 } from '../lib/bridge.mjs';
+import { currentOwner } from '../lib/owner.mjs';
 import { fake, captureRuntime, setup } from './helpers/fake-dsh.mjs';
 
 const digest = (buffer) => createHash('sha256').update(buffer).digest('hex');
@@ -39,6 +41,21 @@ async function deadPid() {
   await once(child, 'close');
   return child.pid;
 }
+
+function saveRecord(home, job) {
+  const dir = path.join(home, 'jobs', job.id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
+  return dir;
+}
+
+const foreignOwner = (pid) => ({
+  id: 'f'.repeat(16),
+  label: `other-agent ${pid}`,
+  pid,
+  startedAt: 1,
+  source: 'process',
+});
 
 test('images are sent as base64 blocks after the text block and recorded without content', async (t) => {
   const { root, options, home } = setup(t, 'describe the images');
@@ -601,6 +618,274 @@ test('stats counts version-1 records as legacy and reserves unreadable for failu
   assert.equal(summary.jobs, 1);
   assert.equal(summary.legacyJobs, 1);
   assert.equal(summary.unreadableJobs, 1);
+});
+
+test('a started job records its owner and workspace kind and guards ownership until adopted', async (t) => {
+  const { options, home } = setup(t, 'ownership guard');
+  const job = await runJob(options, () => {}, home);
+  assert.equal(job.processState, 'completed', job.error);
+
+  const saved = readJob(job.id, home);
+  assert.deepEqual(saved.owner, currentOwner());
+  assert.equal(saved.workspaceKind, 'directory');
+
+  const file = path.join(home, 'jobs', job.id, 'job.json');
+  const record = JSON.parse(fs.readFileSync(file, 'utf8')),
+    gone = foreignOwner(await deadPid());
+  record.owner = gone;
+  fs.writeFileSync(file, JSON.stringify(record));
+
+  const guarded = [
+    ['cancel', () => cancelJob(readJob(job.id, home), home)],
+    ['send', () => sendMessage(readJob(job.id, home), 'hello', home)],
+    ['review', () => reviewJob(readJob(job.id, home), 'rework', 'look again', home)],
+    ['retry', () => retryJob(readJob(job.id, home), 'again', () => {}, home)],
+    ['unlock', () => unlockJob(readJob(job.id, home), true, home)],
+    ['answer', () => answerRequest(readJob(job.id, home), 'request-1', {}, home)],
+  ];
+
+  for (const [name, run] of guarded)
+    await assert.rejects(async () => run(), /which is gone\. Adopt it first: dsb adopt/, name);
+
+  const adopted = adoptJob(readJob(job.id, home), {}, home);
+  assert.equal(adopted.adopted, true);
+  assert.equal(adopted.previousOwner, gone.label);
+  assert.deepEqual(readJob(job.id, home).owner, currentOwner());
+  assert.ok(
+    eventsPage(readJob(job.id, home), 0, 200).events.some(
+      (event) => event.event === 'owner_adopted' && event.from === gone.label,
+    ),
+  );
+
+  assert.equal(cancelJob(readJob(job.id, home), home).cancelRequested, false);
+  assert.equal(reviewJob(readJob(job.id, home), 'rework', 'look again', home).acceptance, 'rework');
+
+  // Lifecycle preconditions still apply to the adopted job; only ownership is released.
+  for (const [name, run] of [
+    ['send', () => sendMessage(readJob(job.id, home), 'hello', home)],
+    ['unlock', () => unlockJob(readJob(job.id, home), true, home)],
+    ['answer', () => answerRequest(readJob(job.id, home), 'request-1', {}, home)],
+  ]) {
+    let message = '';
+    try {
+      await run();
+    } catch (error) {
+      message = error.message;
+    }
+    assert.doesNotMatch(message, /dsb adopt/, name);
+  }
+
+  const retry = await retryJob(readJob(job.id, home), 'again', () => {}, home);
+  assert.equal(retry.processState, 'completed', retry.error);
+});
+
+test('adopting a live foreign job enables cancel, send, answer, and unlock', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-adopt-live-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'),
+    id = '00000000-0000-4000-8000-000000000080';
+  const dir = path.join(home, 'jobs', id),
+    heartbeatFile = path.join(dir, 'heartbeat');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(heartbeatFile, '');
+
+  const job = {
+    version: 2,
+    id,
+    rootId: id,
+    parentId: null,
+    processState: 'running',
+    supervisorPid: process.pid,
+    childPid: null,
+    heartbeatFile,
+    pendingRequests: [{ requestId: 'request-1', method: 'user-question/ask', params: {} }],
+    answeredQuestions: 0,
+    questionCapLifted: false,
+    owner: foreignOwner(await deadPid()),
+    cwd: root,
+    review: null,
+    exitCode: null,
+    reportedResult: null,
+    startedAt: Date.now(),
+  };
+  fs.writeFileSync(path.join(dir, 'job.json'), JSON.stringify(job));
+
+  for (const [name, run] of [
+    ['cancel', () => cancelJob(readJob(id, home), home)],
+    ['send', () => sendMessage(readJob(id, home), 'hello', home)],
+    ['answer', () => answerRequest(readJob(id, home), 'request-1', { answers: [] }, home)],
+  ])
+    await assert.rejects(async () => run(), /Adopt it first: dsb adopt/, name);
+
+  assert.equal(adoptJob(readJob(id, home), {}, home).adopted, true);
+
+  assert.equal(cancelJob(readJob(id, home), home).cancelRequested, true);
+  assert.ok(fs.existsSync(path.join(dir, 'cancel.request')));
+  assert.match(sendMessage(readJob(id, home), 'hello', home).inputId, /^[a-f0-9-]{36}$/);
+  assert.match(
+    answerRequest(readJob(id, home), 'request-1', { answers: [] }, home).inputId,
+    /^[a-f0-9-]{36}$/,
+  );
+  assert.equal(
+    fs.readdirSync(path.join(dir, 'inbox')).filter((name) => name.endsWith('.json')).length,
+    2,
+  );
+
+  // A stale heartbeat lets the adopted job be unlocked once its reservation is abandoned.
+  const old = new Date(Date.now() - 2 * 60 * 1000);
+  fs.utimesSync(heartbeatFile, old, old);
+  const stateFile = path.join(home, 'scheduler', 'state.json');
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  fs.writeFileSync(
+    stateFile,
+    JSON.stringify({
+      version: 1,
+      nextSequence: 2,
+      reservations: [
+        {
+          id,
+          token: '00000000-0000-4000-8000-000000000081',
+          supervisorPid: job.owner.pid,
+          childPid: null,
+          workspace: fs.realpathSync(root),
+          scopes: [fs.realpathSync(root)],
+          readOnly: false,
+          exclusive: false,
+          resources: [],
+          maxConcurrent: 8,
+          state: 'active',
+          sequence: 1,
+          queuedAt: Date.now(),
+          startedAt: Date.now(),
+        },
+      ],
+    }),
+  );
+
+  const unlocked = await unlockJob(readJob(id, home), true, home);
+  assert.equal(unlocked.unlocked, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(stateFile, 'utf8')).reservations, []);
+});
+
+test('adoptJob takes over an orphan, refuses a live owner, and no-ops when already owned', async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-adopt-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'),
+    id = '00000000-0000-4000-8000-000000000090';
+  const dir = path.join(home, 'jobs', id),
+    file = path.join(dir, 'job.json'),
+    gone = foreignOwner(await deadPid());
+
+  fs.mkdirSync(dir, { recursive: true });
+  const job = {
+    version: 2,
+    id,
+    rootId: id,
+    parentId: null,
+    processState: 'completed',
+    cwd: root,
+    review: null,
+    pendingRequests: [],
+  };
+  fs.writeFileSync(file, JSON.stringify({ ...job, owner: gone }));
+
+  const adopted = adoptJob(readJob(id, home), {}, home);
+  assert.equal(adopted.adopted, true);
+  assert.equal(adopted.previousOwner, gone.label);
+  assert.equal(adopted.owner, currentOwner().label);
+  assert.deepEqual(readJob(id, home).owner, currentOwner());
+
+  const event = JSON.parse(fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8').trim());
+  assert.equal(event.event, 'owner_adopted');
+  assert.equal(event.from, gone.label);
+  assert.equal(event.to, currentOwner().label);
+
+  assert.deepEqual(adoptJob(readJob(id, home), {}, home), {
+    id,
+    adopted: false,
+    owner: currentOwner().label,
+    note: 'Already owned by this session',
+  });
+
+  const live = {
+    id: 'a'.repeat(16),
+    label: 'live-agent',
+    pid: process.pid,
+    startedAt: null,
+    source: 'process',
+  };
+  fs.writeFileSync(file, JSON.stringify({ ...readJob(id, home), owner: live }));
+
+  assert.throws(
+    () => adoptJob(readJob(id, home), {}, home),
+    /still held by live-agent, which is running.*--user-ok/,
+  );
+  assert.equal(adoptJob(readJob(id, home), { userOk: true }, home).adopted, true);
+  assert.deepEqual(readJob(id, home).owner, currentOwner());
+});
+
+test('a record with no owner field stays operable by any session', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-no-owner-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'),
+    id = '00000000-0000-4000-8000-0000000000a0';
+
+  const job = {
+    version: 2,
+    id,
+    rootId: id,
+    parentId: null,
+    processState: 'completed',
+    cwd: root,
+    review: null,
+    pendingRequests: [],
+    exitCode: 0,
+    reportedResult: 'OK',
+  };
+  saveRecord(home, job);
+
+  assert.equal(cancelJob(readJob(id, home), home).cancelRequested, false);
+  assert.equal(reviewJob(readJob(id, home), 'rework', 'note', home).acceptance, 'rework');
+});
+
+test('stats counts this session and unowned jobs, and --all counts every session', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-stats-owner-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'),
+    mine = currentOwner(),
+    otherId = mine.id === 'f'.repeat(16) ? 'e'.repeat(16) : 'f'.repeat(16);
+
+  const records = [
+    { id: '00000000-0000-4000-8000-0000000000b0', owner: mine },
+    { id: '00000000-0000-4000-8000-0000000000b1' },
+    {
+      id: '00000000-0000-4000-8000-0000000000b2',
+      owner: { id: otherId, label: 'other-agent 42', pid: 999999, startedAt: 1, source: 'process' },
+    },
+  ];
+
+  for (const record of records)
+    saveRecord(home, {
+      version: 2,
+      rootId: record.id,
+      parentId: null,
+      processState: 'completed',
+      cwd: root,
+      review: null,
+      pendingRequests: [],
+      usage: null,
+      ...record,
+    });
+
+  const own = stats(home);
+  assert.equal(own.jobs, 2);
+  assert.equal(own.otherSessionJobs, 1);
+  assert.equal(own.counts, 'jobs started by this session');
+
+  const every = stats(home, { all: true });
+  assert.equal(every.jobs, 3);
+  assert.equal(every.otherSessionJobs, 0);
+  assert.equal(every.counts, 'every session sharing this DSH_HOME');
 });
 
 test('retired forwarding fields and events in old records are read without errors', async (t) => {
