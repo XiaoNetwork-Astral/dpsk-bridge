@@ -3,7 +3,12 @@
 All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [0.6.0] - 2026-11-08
+
+### Breaking
+
+- `cancel`, `unlock`, `send`, `answer`, `retry`, and `review` refuse a job started by another host session, whether or not that session is still running; take it over with `dsb adopt` first (see Added).
+- `dsb stats` counts only the current session's jobs by default; `dsb stats --all` gives the previous total.
 
 ### Added
 
