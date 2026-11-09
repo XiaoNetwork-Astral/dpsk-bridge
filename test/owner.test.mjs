@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveOwner, ownedBy, ownerBadge } from '../lib/owner.mjs';
+import { resolveOwner, ownedBy, ownerBadge, parseMsysTable } from '../lib/owner.mjs';
 
 const STARTED = 1_700_000_000_000;
 
@@ -12,6 +12,67 @@ function proc(pid, ppid, name, command, startedAt = STARTED) {
 function tableOf(...entries) {
   return new Map(entries.map((entry) => [entry.pid, entry]));
 }
+
+function winProc(pid, ppid, name, command, executablePath = '', startedAt = STARTED) {
+  return { ...proc(pid, ppid, name, command, startedAt), executablePath };
+}
+
+function msysRow(pid, ppid, winpid) {
+  return { pid, ppid, winpid };
+}
+
+const MSYS_DIR = 'C:\\Program Files\\Git\\usr\\bin';
+
+const NODE_COMMAND =
+  '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\U\\AppData\\Roaming\\npm\\node_modules\\dpsk-bridge\\bin\\dsb.mjs" answer abc';
+
+const NODE_PATH = 'C:\\Program Files\\nodejs\\node.exe';
+
+const SH_COMMAND =
+  '"C:\\Program Files\\Git\\usr\\bin\\sh.exe" /c/Users/U/AppData/Roaming/npm/dsb answer abc';
+
+const SH_PATH = 'C:\\Program Files\\Git\\usr\\bin\\sh.exe';
+
+const BASH_COMMAND =
+  '"C:\\Program Files\\Git\\bin\\..\\usr\\bin\\bash.exe" -- C:/Users/U/AppData/Local/Temp/cmd-1.sh';
+
+const BASH_PATH = 'C:\\Program Files\\Git\\usr\\bin\\bash.exe';
+
+const HOST_BASH_COMMAND =
+  '"C:\\Program Files\\Git\\bin\\bash.exe" -- C:/Users/U/AppData/Local/Temp/cmd-1.sh';
+
+const HOST_BASH_PATH = 'C:\\Program Files\\Git\\bin\\bash.exe';
+
+const CLAUDE_COMMAND = '"C:\\WINDOWS\\claude.exe"';
+
+const CLAUDE_PATH = 'C:\\WINDOWS\\claude.exe';
+
+/** The captured Windows tree, with the node process hanging off `nodeParent`. */
+function shimTable(nodeParent, extra = []) {
+  return tableOf(
+    winProc(51136, nodeParent, 'node.exe', NODE_COMMAND, NODE_PATH),
+    ...extra,
+    winProc(40144, 6156, 'bash.exe', BASH_COMMAND, BASH_PATH),
+    winProc(6156, 53256, 'bash.exe', HOST_BASH_COMMAND, HOST_BASH_PATH),
+    winProc(53256, 46204, 'claude.exe', CLAUDE_COMMAND, CLAUDE_PATH),
+    winProc(
+      46204,
+      29264,
+      'nu.exe',
+      '"C:\\Program Files\\nu\\bin\\nu.exe"',
+      'C:\\Program Files\\nu\\bin\\nu.exe',
+    ),
+  );
+}
+
+const MSYS_ROWS = [
+  msysRow(4462, 1, 52820),
+  msysRow(4463, 4462, 16776),
+  msysRow(4604, 4601, 51136),
+  msysRow(3903, 1, 1968),
+  msysRow(4605, 1, 12068),
+  msysRow(4601, 1, 40144),
+];
 
 test('a claude-code-shaped tree resolves to the host binary above the shells', () => {
   const table = tableOf(
@@ -115,6 +176,121 @@ test('a tree of nothing but shells falls back to the outermost shell', () => {
   assert.equal(owner.label, 'bash 602');
   assert.equal(owner.source, 'shell');
   assert.match(owner.id, /^[0-9a-f]{16}$/);
+});
+
+test('the MSYS bridge resolves an npm shim tree broken by the Git Bash exec', () => {
+  const calls = [];
+  const source = (dir) => {
+    calls.push(dir);
+    return MSYS_ROWS;
+  };
+  const broken = resolveOwner({
+    env: {},
+    pid: 51136,
+    table: shimTable(2740, [winProc(2740, 11552, 'sh.exe', SH_COMMAND, SH_PATH)]),
+    msysSource: source,
+  });
+  const intact = resolveOwner({
+    env: {},
+    pid: 51136,
+    table: shimTable(40144),
+    msysSource: () => assert.fail('the bridge must not be read for an intact chain'),
+  });
+
+  assert.deepEqual(calls, [MSYS_DIR]);
+  assert.equal(broken.pid, 53256);
+  assert.equal(broken.label, 'claude 53256');
+  assert.equal(broken.source, 'process');
+  assert.equal(broken.id, intact.id);
+});
+
+test('an intact Windows chain never reads the MSYS table', () => {
+  const owner = resolveOwner({
+    env: {},
+    pid: 51136,
+    table: shimTable(40144),
+    msysSource: () => assert.fail('the bridge must not be read'),
+  });
+
+  assert.equal(owner.pid, 53256);
+  assert.equal(owner.source, 'process');
+});
+
+test('a background Git Bash shim tree bridges to the same host', () => {
+  const table = tableOf(
+    winProc(62000, 9001, 'node.exe', NODE_COMMAND, NODE_PATH),
+    winProc(9001, 7777, 'sh.exe', SH_COMMAND, SH_PATH),
+    winProc(88000, 99000, 'bash.exe', HOST_BASH_COMMAND, HOST_BASH_PATH),
+    winProc(99000, 1234, 'claude.exe', CLAUDE_COMMAND, CLAUDE_PATH),
+  );
+  const owner = resolveOwner({
+    env: {},
+    pid: 62000,
+    table,
+    msysSource: () => [msysRow(5000, 5001, 62000), msysRow(5001, 1, 88000)],
+  });
+
+  assert.equal(owner.pid, 99000);
+  assert.equal(owner.label, 'claude 99000');
+  assert.equal(owner.source, 'process');
+});
+
+test('a missing runtime directory leaves the outermost shell as owner', () => {
+  const owner = resolveOwner({
+    env: {},
+    pid: 51136,
+    table: shimTable(2740, [winProc(2740, 11552, 'sh.exe', 'sh answer abc')]),
+    msysSource: () => assert.fail('no runtime directory means no bridge read'),
+  });
+
+  assert.equal(owner.pid, 2740);
+  assert.equal(owner.label, 'sh 2740');
+  assert.equal(owner.source, 'shell');
+});
+
+test('a null MSYS table leaves the outermost shell as owner', () => {
+  const owner = resolveOwner({
+    env: {},
+    pid: 51136,
+    table: shimTable(2740, [winProc(2740, 11552, 'sh.exe', SH_COMMAND, SH_PATH)]),
+    msysSource: () => null,
+  });
+
+  assert.equal(owner.pid, 2740);
+  assert.equal(owner.label, 'sh 2740');
+  assert.equal(owner.source, 'shell');
+});
+
+test('a bridged parent missing from the Windows table falls back to the shell', () => {
+  const table = tableOf(
+    winProc(51136, 2740, 'node.exe', NODE_COMMAND, NODE_PATH),
+    winProc(2740, 11552, 'sh.exe', SH_COMMAND, SH_PATH),
+  );
+  const owner = resolveOwner({
+    env: {},
+    pid: 51136,
+    table,
+    msysSource: () => MSYS_ROWS,
+  });
+
+  assert.equal(owner.pid, 2740);
+  assert.equal(owner.label, 'sh 2740');
+  assert.equal(owner.source, 'shell');
+});
+
+test('MSYS ps rows parse with and without a leading status flag', () => {
+  const raw = [
+    '      PID    PPID    PGID     WINPID   TTY         UID    STIME COMMAND',
+    '     4462       1    4462      52820  ?         197608 23:25:10 /usr/bin/bash',
+    '  S  4604    4601    4601      51136  ?         197608 23:27:44 /c/Program Files/nodejs/node',
+    '  O  4601       1    4601      40144  ?         197608 23:27:44 /usr/bin/bash',
+  ].join('\n');
+
+  assert.deepEqual(parseMsysTable(raw), [
+    msysRow(4462, 1, 52820),
+    msysRow(4604, 4601, 51136),
+    msysRow(4601, 1, 40144),
+  ]);
 });
 
 test('an unreadable process table yields an unknown owner with no id', () => {

@@ -3,6 +3,12 @@
 All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Fixed
+
+- On Windows, jobs started through the npm `dsb` shim in Git Bash, including from a background shell, are now owned by the host session instead of a short-lived `sh` process, so later commands no longer need `adopt` or `DPSK_OWNER`.
+
 ## [0.6.0] - 2026-11-08
 
 ### Breaking
