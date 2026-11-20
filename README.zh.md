@@ -72,10 +72,13 @@ dsb answer <ID> --request <REQ_ID> --answer answer.json  # 回答提问或权限
 dsb result <ID>                                # 读取最终报告
 dsb review <ID> --verdict accepted --note "npm test passes" # 记录验收结果
 dsb stats [--all]                              # 统计当前会话的作业（--all 统计全部会话）
+dsb list [--all] [--history]                   # 列出当前会话仍需处理的作业（含完整 ID）
 dsb adopt <ID> [--user-ok]                     # 接管其他会话启动的作业
 ```
 
 每个作业都归属于启动它的宿主会话，因为所有工作区共用同一个 `DSH_HOME`。会改变作业状态的命令（`cancel`、`unlock`、`send`、`answer`、`retry`、`review`）会拒绝其他会话启动的作业；`status`、`result`、`events`、`wait` 仍可读取。原会话已退出时，先检查作业状态，再用 `dsb adopt <ID>` 接管；只有原会话仍在运行且用户已决定接管时，才用 `dsb adopt <ID> --user-ok`。接管只改变归属，不会恢复作业，继续前先检查状态。归属默认从进程树推导，也可以用 `DPSK_OWNER` 显式指定；与 `--scope` 一样，这是协作约定而非沙箱，能读取 `DSH_HOME` 的对象仍可访问所有作业记录
+
+宿主的上下文被压缩、或换了新会话接手后，可以用 `dsb list` 重新找回作业，因为其他 `dsb` 命令都需要完整的作业 ID。它默认列出当前会话仍需处理的作业，即尚未验收、也没有被 retry 取代的作业，按时间倒序，最多 20 条（`--limit` 可调）；`--all` 包含所有会话的作业，`--history` 连已处理完的作业一起列出
 
 完整的命令参数、JSON 格式与缩写请查看 `dsb <command> --help`
 

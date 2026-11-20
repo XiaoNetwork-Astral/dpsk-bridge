@@ -19,6 +19,7 @@ import {
   retryJob,
   reviewJob,
   stats,
+  listJobs,
   briefText,
   waitJob,
   unlockJob,
@@ -886,6 +887,222 @@ test('stats counts this session and unowned jobs, and --all counts every session
   assert.equal(every.jobs, 3);
   assert.equal(every.otherSessionJobs, 0);
   assert.equal(every.counts, 'every session sharing this DSH_HOME');
+});
+
+test('list shows this session and unowned jobs, and --all shows every session', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-list-owner-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge'),
+    mine = currentOwner(),
+    otherId = mine.id === 'f'.repeat(16) ? 'e'.repeat(16) : 'f'.repeat(16);
+  const ids = {
+    mine: '00000000-0000-4000-8000-0000000000d0',
+    unowned: '00000000-0000-4000-8000-0000000000d1',
+    other: '00000000-0000-4000-8000-0000000000d2',
+  };
+
+  const records = [
+    {
+      id: ids.mine,
+      owner: mine,
+      startedAt: 1000,
+      pendingRequests: [{ requestId: 'request-1' }, { requestId: 'request-2' }],
+    },
+    { id: ids.unowned, startedAt: 3000 },
+    {
+      id: ids.other,
+      owner: { id: otherId, label: 'other-agent 42', pid: 999999, startedAt: 1, source: 'process' },
+      startedAt: 2000,
+    },
+  ];
+
+  for (const record of records)
+    saveRecord(home, {
+      version: 2,
+      rootId: record.id,
+      parentId: null,
+      processState: 'completed',
+      cwd: root,
+      review: null,
+      pendingRequests: [],
+      usage: null,
+      ...record,
+    });
+
+  const own = listJobs(home);
+  assert.deepEqual(
+    own.jobs.map((job) => job.id),
+    [ids.unowned, ids.mine],
+  );
+  assert.equal(own.total, 2);
+  assert.equal(own.jobs[1].pendingRequests, 2);
+  assert.equal(own.jobs[1].id.length, 36);
+  assert.equal(own.jobs[1].acceptance, 'unreviewed');
+
+  const every = listJobs(home, { all: true });
+  assert.deepEqual(
+    every.jobs.map((job) => job.id),
+    [ids.unowned, ids.other, ids.mine],
+  );
+  assert.equal(every.total, 3);
+});
+
+test('list hides accepted jobs and retried parents unless --history', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-list-attention-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge');
+  const ids = {
+    parent: '00000000-0000-4000-8000-0000000000e0',
+    retry: '00000000-0000-4000-8000-0000000000e1',
+    accepted: '00000000-0000-4000-8000-0000000000e2',
+    open: '00000000-0000-4000-8000-0000000000e3',
+  };
+
+  const base = {
+    version: 2,
+    processState: 'completed',
+    cwd: root,
+    pendingRequests: [],
+    usage: null,
+  };
+
+  saveRecord(home, {
+    ...base,
+    id: ids.parent,
+    rootId: ids.parent,
+    parentId: null,
+    startedAt: 1000,
+    review: null,
+  });
+  saveRecord(home, {
+    ...base,
+    id: ids.retry,
+    rootId: ids.parent,
+    parentId: ids.parent,
+    startedAt: 3000,
+    review: null,
+  });
+  saveRecord(home, {
+    ...base,
+    id: ids.accepted,
+    rootId: ids.accepted,
+    parentId: null,
+    startedAt: 2000,
+    review: { verdict: 'accepted', note: 'tests pass', at: 1 },
+  });
+  saveRecord(home, {
+    ...base,
+    id: ids.open,
+    rootId: ids.open,
+    parentId: null,
+    startedAt: 500,
+    review: null,
+  });
+
+  const attention = listJobs(home);
+  assert.deepEqual(
+    attention.jobs.map((job) => job.id),
+    [ids.retry, ids.open],
+  );
+  assert.equal(attention.total, 2);
+
+  const history = listJobs(home, { history: true });
+  assert.deepEqual(
+    history.jobs.map((job) => job.id),
+    [ids.retry, ids.accepted, ids.parent, ids.open],
+  );
+  assert.equal(history.total, 4);
+});
+
+test('list orders newest first, limits after filtering, and reports the total', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-list-limit-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge');
+  const ids = Array.from(
+    { length: 22 },
+    (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+  );
+
+  for (let index = 0; index < ids.length; index++)
+    saveRecord(home, {
+      version: 2,
+      id: ids[index],
+      rootId: ids[index],
+      parentId: null,
+      processState: 'completed',
+      cwd: root,
+      review: null,
+      pendingRequests: [],
+      startedAt: 1000 + index * 1000,
+    });
+
+  const defaults = listJobs(home);
+  assert.equal(defaults.total, 22);
+  assert.equal(defaults.jobs.length, 20);
+  assert.deepEqual(
+    defaults.jobs.map((job) => job.id),
+    ids.slice().reverse().slice(0, 20),
+  );
+
+  const three = listJobs(home, { limit: 3 });
+  assert.equal(three.total, 22);
+  assert.deepEqual(
+    three.jobs.map((job) => job.id),
+    [ids[21], ids[20], ids[19]],
+  );
+
+  for (const limit of [0, 501, '0', 'many', 1.5])
+    assert.throws(() => listJobs(home, { limit }), /limit must be between 1 and 500/);
+});
+
+test('list takes titles from briefs, skipping label-only lines and missing briefs', (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dpsk-bridge-list-title-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, 'bridge');
+  const ids = {
+    labelOnly: '00000000-0000-4000-8000-0000000000f0',
+    inline: '00000000-0000-4000-8000-0000000000f1',
+    missing: '00000000-0000-4000-8000-0000000000f2',
+    unreadable: '00000000-0000-4000-8000-0000000000f3',
+    long: '00000000-0000-4000-8000-0000000000f4',
+    defaultPath: '00000000-0000-4000-8000-0000000000f5',
+  };
+  const dirOf = (id) => path.join(home, 'jobs', id);
+  const briefOf = (id) => path.join(dirOf(id), 'brief.md');
+  const briefs = {
+    [ids.labelOnly]: '[Goal]\n\n  Add   a `dsb list`   command\nnext line\n',
+    [ids.inline]: '[Goal] Fix   the parser\n\nDetails follow\n',
+    [ids.long]: 'x'.repeat(100),
+    [ids.defaultPath]: 'Default path title\n',
+  };
+
+  const record = (id, startedAt, originalBriefFile) => ({
+    version: 2,
+    id,
+    rootId: id,
+    parentId: null,
+    processState: 'completed',
+    cwd: root,
+    review: null,
+    pendingRequests: [],
+    startedAt,
+    originalBriefFile,
+  });
+
+  let startedAt = 0;
+  for (const id of Object.values(ids)) {
+    const brief = id === ids.unreadable ? root : id === ids.defaultPath ? undefined : briefOf(id);
+    saveRecord(home, record(id, ++startedAt, brief));
+    if (briefs[id]) fs.writeFileSync(briefOf(id), briefs[id]);
+  }
+
+  const byId = new Map(listJobs(home).jobs.map((job) => [job.id, job]));
+  assert.equal(byId.get(ids.labelOnly).title, 'Add a `dsb list` command');
+  assert.equal(byId.get(ids.inline).title, 'Fix the parser');
+  assert.equal(byId.get(ids.missing).title, null);
+  assert.equal(byId.get(ids.unreadable).title, null);
+  assert.equal(byId.get(ids.long).title, `${'x'.repeat(80)}…`);
+  assert.equal(byId.get(ids.defaultPath).title, 'Default path title');
 });
 
 test('retired forwarding fields and events in old records are read without errors', async (t) => {

@@ -124,6 +124,13 @@ const CASES = [
   },
   { name: 'adopt', id: ID, args: [ID], expected: {} },
   { name: 'adopt', id: ID, args: [ID, '--user-ok'], expected: { userOk: true } },
+  { name: 'list', id: null, args: [], expected: {} },
+  {
+    name: 'list',
+    id: null,
+    args: ['--all', '--history', '--limit', '5'],
+    expected: { all: true, history: true, limit: '5' },
+  },
   { name: 'stats', id: null, args: [], expected: {} },
   { name: 'stats', id: null, args: ['--all'], expected: { all: true } },
 ];
@@ -616,6 +623,33 @@ test('adopt and stats parse their flags and appear in help output', () => {
 
   assert.match(rootHelp(), /^  adopt\s+Take over a job/m);
   assert.match(rootHelp(), /^  stats\s+Summarize local jobs/m);
+});
+
+test('list parses its filters and documents them in help', () => {
+  assert.deepEqual(parseCommand('list', []), {
+    action: 'command',
+    command: 'list',
+    options: emptyLists(),
+    positionals: {},
+  });
+  assert.deepEqual(parseCommand('list', ['--all', '--history', '--limit', '3']).options, {
+    ...emptyLists(),
+    all: true,
+    history: true,
+    limit: '3',
+  });
+  assert.throws(() => parseCommand('list', [ID]), /Unexpected argument/);
+
+  assert.match(commandHelp('list'), /^List this session's jobs that still need attention/);
+  assert.match(commandHelp('list'), /Usage: dsb list \[--all\] \[--history\] \[--limit <N>\]/);
+  assert.match(commandHelp('list'), /--all\s+List jobs from every session sharing this DSH_HOME/);
+  assert.match(commandHelp('list'), /--history\s+Also list accepted jobs/);
+  assert.match(
+    commandHelp('list'),
+    /--limit <N>\s+Maximum jobs to list \(1\.\.500\) \[default: 20\]/,
+  );
+
+  assert.match(rootHelp(), /^  list\s+List this session's jobs/m);
 });
 
 test('long descriptions wrap to 100 columns by default and remain aligned', () => {

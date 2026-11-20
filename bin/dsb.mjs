@@ -11,6 +11,7 @@ import {
   cancelJob,
   unlockJob,
   adoptJob,
+  listJobs,
   stats,
   briefText,
   sendMessage,
@@ -45,6 +46,14 @@ try {
       const job = await runJob(options, emit);
       emit({ event: 'finished', ...result(job) });
       process.exitCode = job.processState === 'completed' && job.reportedResult === 'OK' ? 0 : 1;
+    } else if (command === 'list') {
+      emit(
+        listJobs(undefined, {
+          all: !!options.all,
+          history: !!options.history,
+          limit: options.limit,
+        }),
+      );
     } else if (command === 'stats') {
       emit(stats(undefined, { all: !!options.all }));
     } else {

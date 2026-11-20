@@ -72,10 +72,13 @@ dsb answer <ID> --request <REQ_ID> --answer answer.json  # answer a question or 
 dsb result <ID>                                # read the final report
 dsb review <ID> --verdict accepted --note "npm test passes" # record the acceptance result
 dsb stats [--all]                              # summarize this session's jobs (--all: every session's)
+dsb list [--all] [--history]                   # list this session's jobs that still need attention, with full IDs
 dsb adopt <ID> [--user-ok]                     # take over a job another session started
 ```
 
 Each job belongs to the host session that started it, because every workspace shares one `DSH_HOME`. Commands that change a job (`cancel`, `unlock`, `send`, `answer`, `retry`, `review`) refuse a job another session started; `status`, `result`, `events`, and `wait` still read it. If the owner is gone, inspect the job and run `dsb adopt <ID>`; `dsb adopt <ID> --user-ok` is only for a job whose owner is still running, after the user has decided. Adopting changes the owner, not the job's state, so check the state first. The owner is derived from the process tree, or set explicitly with `DPSK_OWNER`; like `--scope`, this is cooperative, not a sandbox, and anything that can read `DSH_HOME` can still reach every job record
+
+`dsb list` finds jobs again after the host's context was compacted or a new session took over, since every other `dsb` command needs the full job ID. By default it shows this session's jobs that still need attention, meaning not yet accepted and not replaced by a retry, newest first and at most 20 (`--limit`); `--all` includes every session's jobs, and `--history` also the ones already dealt with
 
 For every option, the JSON formats, and short aliases, see `dsb <command> --help`
 
