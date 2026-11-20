@@ -101,17 +101,17 @@ Press `?` in the viewer for the key bindings (common ones: `d` switches between 
 
 Command-line options take precedence over environment variables, and `dsb retry` reuses the original job's settings by default:
 
-| Variable                   | Description                                         | Default             |
-| -------------------------- | --------------------------------------------------- | ------------------- |
-| `DPSK_PROVIDER`            | Model provider route                                | `deepseek-official` |
-| `DPSK_MODEL`               | Model name                                          | `deepseek-flash`    |
-| `DPSK_CONCURRENCY`         | Shared concurrent job limit (1–256)                 | `8`                 |
-| `DPSK_START_CONCURRENCY`   | Jobs that may start at once (1–64); smallest wins   | `1`                 |
-| `DPSK_INITIALIZE_TIMEOUT`  | dsh startup budget (ms), plus 60000 per `--patch`   | `120000`            |
-| `DPSK_PROMPT_TIMEOUT`      | Session creation budget (ms)                        | `90000`             |
-| `DPSK_OWNER`               | Explicit host session id instead of process lookup  | derived             |
-| `DPSK_CONTEXT_LIMIT`       | Context reminder threshold (tokens)                 | `200000`            |
-| `DSH_HOME`                 | `dsh` home directory (jobs in `$DSH_HOME/bridge`)   | `~/.dsh`            |
+| Variable                  | Description                                        | Default             |
+| ------------------------- | -------------------------------------------------- | ------------------- |
+| `DPSK_PROVIDER`           | Model provider route                               | `deepseek-official` |
+| `DPSK_MODEL`              | Model name                                         | `deepseek-flash`    |
+| `DPSK_CONCURRENCY`        | Shared concurrent job limit (1–256)                | `8`                 |
+| `DPSK_START_CONCURRENCY`  | Jobs that may start at once (1–64); smallest wins  | `1`                 |
+| `DPSK_INITIALIZE_TIMEOUT` | dsh startup budget (ms), plus 60000 per `--patch`  | `120000`            |
+| `DPSK_PROMPT_TIMEOUT`     | Session creation budget (ms)                       | `90000`             |
+| `DPSK_OWNER`              | Explicit host session id instead of process lookup | derived             |
+| `DPSK_CONTEXT_LIMIT`      | Context reminder threshold (tokens)                | `200000`            |
+| `DSH_HOME`                | `dsh` home directory (jobs in `$DSH_HOME/bridge`)  | `~/.dsh`            |
 
 Jobs take turns starting: one starts at a time by default, and they run concurrently once up. `DPSK_START_CONCURRENCY` changes how many may start at once; the smallest value among participating launchers applies, like `DPSK_CONCURRENCY`. A timeout names the phase that stalled, so raise `DPSK_INITIALIZE_TIMEOUT` or `DPSK_PROMPT_TIMEOUT` only when that extra time is expected. Waiting costs a job nothing: `--time-limit` is counted from the moment the job starts, not from when it was queued, and `dsb status` reports both `startedAt` (queued) and `runningAt` (started)
 
