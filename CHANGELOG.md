@@ -3,6 +3,13 @@
 All notable changes to this project are documented in this file. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.0] - 2026-11-21
+
+### Added
+
+- `dsb list` lists this session's jobs that still need attention — not yet accepted and not replaced by a retry — with full job IDs, newest first, so a host agent whose context was compacted, or a new session taking over, can find its jobs again. The other `dsb` commands need the full ID, while `dsv ls` shows only its first 8 characters and `dsb stats` only counts. `--all` includes every session's jobs, `--history` also the ones already dealt with, and `--limit` (1..500, default 20) caps the output; `total` gives the count before the limit. Each entry carries a short title taken from the job's brief.
+- The deepseek-delegate skill has a section on recovering after compaction or a resumed session: rebuild the state from `dsb list` and `dsb status` rather than from memory, keep one `dsb wait` per running job, and dispatch a job again only after it ended.
+
 ## [0.6.1] - 2026-11-09
 
 ### Fixed
